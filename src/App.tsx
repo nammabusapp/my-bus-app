@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { OfflineIndicator } from './components/OfflineIndicator';
 import { OperationsPortal } from './components/OperationsPortal';
 import { UserPortal } from './components/UserPortal';
 import { useMyBusRealtime } from './hooks/useMyBusRealtime';
@@ -124,26 +125,27 @@ export default function App() {
     setRoute(resolveRouteFromLocation());
   }, []);
 
-  if (route.portal === 'operations') {
-    return (
-      <OperationsPortal
-        initialMode={route.opsMode}
-        theme={theme}
-        onToggleTheme={toggleTheme}
-        lang={lang}
-        onToggleLang={toggleLang}
-        onBackToUser={() => navigateTo('/')}
-      />
-    );
-  }
-
   return (
-    <UserPortalContainer
-      theme={theme}
-      onToggleTheme={toggleTheme}
-      lang={lang}
-      onToggleLang={toggleLang}
-      onOpenOperations={() => navigateTo('/ops')}
-    />
+    <>
+      {route.portal === 'operations' ? (
+        <OperationsPortal
+          initialMode={route.opsMode}
+          theme={theme}
+          onToggleTheme={toggleTheme}
+          lang={lang}
+          onToggleLang={toggleLang}
+          onBackToUser={() => navigateTo('/')}
+        />
+      ) : (
+        <UserPortalContainer
+          theme={theme}
+          onToggleTheme={toggleTheme}
+          lang={lang}
+          onToggleLang={toggleLang}
+          onOpenOperations={() => navigateTo('/ops')}
+        />
+      )}
+      <OfflineIndicator lang={lang} />
+    </>
   );
 }

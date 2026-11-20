@@ -37,6 +37,7 @@ import {
 } from '../utils/kannada';
 import { LanguageToggle } from './LanguageToggle';
 import { LiveTransitMap } from './LiveTransitMap';
+import { PWAInstallButton } from './PWAInstallButton';
 import { ThemeToggle } from './ThemeToggle';
 
 const HERO_BUS_IMAGE = '/src/assets/images/hero_modern_bus_1795111364827.jpg';
@@ -294,6 +295,7 @@ export function UserPortal({
             </nav>
 
             <div className="flex items-center gap-2 shrink-0">
+              <PWAInstallButton lang={lang} />
               <LanguageToggle lang={lang} onToggle={onToggleLang} />
               <ThemeToggle theme={theme} onToggle={onToggleTheme} />
               <button
@@ -554,6 +556,7 @@ export function UserPortal({
             </div>
 
             <div className="flex items-center gap-2 shrink-0">
+              <PWAInstallButton lang={lang} />
               <LanguageToggle lang={lang} onToggle={onToggleLang} />
               <ThemeToggle theme={theme} onToggle={onToggleTheme} />
               <button
@@ -904,6 +907,7 @@ export function UserPortal({
             </div>
 
             <div className="flex items-center gap-2 shrink-0">
+              <PWAInstallButton lang={lang} />
               <LanguageToggle lang={lang} onToggle={onToggleLang} />
               <ThemeToggle theme={theme} onToggle={onToggleTheme} />
               <button

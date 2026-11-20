@@ -37,6 +37,7 @@ import {
 } from '../utils/kannada';
 import { LanguageToggle } from './LanguageToggle';
 import { LiveTransitMap } from './LiveTransitMap';
+import { PWAInstallButton } from './PWAInstallButton';
 import { ThemeToggle } from './ThemeToggle';
 
 type DriverStep = 'login' | 'permission' | 'route';
@@ -691,6 +692,7 @@ export function OperationsPortal({
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
+            <PWAInstallButton lang={lang} />
             <LanguageToggle lang={lang} onToggle={onToggleLang} />
             <ThemeToggle theme={theme} onToggle={onToggleTheme} />
           </div>

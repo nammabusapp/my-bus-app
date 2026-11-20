@@ -83,6 +83,13 @@ export interface Translations {
   liveBusesMonitor: string;
   needLocationForDest: string;
   detectMyLocation: string;
+  installApp: string;
+  installOnIos: string;
+  iosInstallTitle: string;
+  iosInstallStep1: string;
+  iosInstallStep2: string;
+  close: string;
+  offlineMessage: string;
   incidentLabels: Record<BusIncidentStatus, string>;
 }
 
@@ -178,6 +185,13 @@ export const TRANSLATIONS: Record<AppLang, Translations> = {
     needLocationForDest:
       'Enter or detect Your Location to filter buses passing through your stop',
     detectMyLocation: 'Detect My Location',
+    installApp: 'Install App',
+    installOnIos: 'Install App',
+    iosInstallTitle: 'Install My Bus on iPhone / iPad',
+    iosInstallStep1: 'Tap the Share button in the Safari toolbar.',
+    iosInstallStep2: 'Scroll down and tap Add to Home Screen.',
+    close: 'Close',
+    offlineMessage: 'Offline Mode — Showing cached bus schedules.',
     incidentLabels: {
       Normal: 'Normal',
       Delayed: 'Delayed',
@@ -278,6 +292,13 @@ export const TRANSLATIONS: Record<AppLang, Translations> = {
     needLocationForDest:
       'ನಿಮ್ಮ ಸ್ಥಳದ ಮೂಲಕ ಹಾದುಹೋಗುವ ಬಸ್‌ಗಳನ್ನು ನೋಡಲು ನಿಮ್ಮ ಸ್ಥಳವನ್ನು ನಮೂದಿಸಿ ಅಥವಾ GPS ಬಳಸಿ',
     detectMyLocation: 'ನನ್ನ ಸ್ಥಳ ಪತ್ತೆಹಚ್ಚಿ',
+    installApp: 'ಆ್ಯಪ್ ಇನ್‌ಸ್ಟಾಲ್',
+    installOnIos: 'ಆ್ಯಪ್ ಇನ್‌ಸ್ಟಾಲ್',
+    iosInstallTitle: 'iPhone / iPad ನಲ್ಲಿ ಮೈ ಬಸ್ ಇನ್‌ಸ್ಟಾಲ್ ಮಾಡಿ',
+    iosInstallStep1: 'Safari ಟೂಲ್‌ಬಾರ್‌ನಲ್ಲಿರುವ Share ಬಟನ್ ಒತ್ತಿರಿ.',
+    iosInstallStep2: 'ಕೆಳಗೆ ಸ್ಕ್ರಾಲ್ ಮಾಡಿ Add to Home Screen ಆಯ್ಕೆಮಾಡಿ.',
+    close: 'ಮುಚ್ಚಿ',
+    offlineMessage: 'ಆಫ್‌ಲೈನ್ ಮೋಡ್ — ಉಳಿಸಿದ ವೇಳಾಪಟ್ಟಿ ತೋರಿಸಲಾಗುತ್ತಿದೆ.',
     incidentLabels: {
       Normal: 'ಸಾಮಾನ್ಯ',
       Delayed: 'ವಿಳಂಬ',
