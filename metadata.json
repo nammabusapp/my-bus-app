@@ -1,0 +1,6 @@
+{
+  "name": "My Bus",
+  "description": "Real-time bus timing directory, live GPS bus tracking with ETA and direction, driver telemetry sharing, and fleet administration.",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
