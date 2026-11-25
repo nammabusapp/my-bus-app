@@ -2,8 +2,9 @@ import { useCallback, useEffect, useState } from 'react';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { OperationsPortal } from './components/OperationsPortal';
 import { UserPortal } from './components/UserPortal';
-import { useMyBusRealtime } from './hooks/useMyBusRealtime';
+import { BusApproachingEventPayload, useMyBusRealtime } from './hooks/useMyBusRealtime';
 import { AppLang, AppPortal, OpsMode, ThemeMode } from './types';
+import { showLocalSWNotification } from './utils/pushNotifications';
 
 function resolveRouteFromLocation(): { portal: AppPortal; opsMode: OpsMode } {
   const path = window.location.pathname.toLowerCase();
@@ -59,7 +60,34 @@ function UserPortalContainer({
   onToggleLang: () => void;
   onOpenOperations: () => void;
 }) {
-  const { timings, liveBuses, loading } = useMyBusRealtime({ role: 'user' });
+  const [approachingEvent, setApproachingEvent] =
+    useState<BusApproachingEventPayload | null>(null);
+
+  const handleBusApproaching = useCallback(
+    (payload: BusApproachingEventPayload) => {
+      setApproachingEvent(payload);
+      void showLocalSWNotification({
+        title:
+          payload.title ||
+          `Bus ${payload.alert.busNo} approaching ${payload.alert.stopLabel}`,
+        body: payload.body,
+        tag: payload.tag,
+        data: {
+          driverId: payload.alert.driverId,
+          busNo: payload.alert.busNo,
+          stopLabel: payload.alert.stopLabel,
+          url: `/?track=${encodeURIComponent(payload.alert.driverId)}`,
+        },
+      });
+    },
+    []
+  );
+
+  const { timings, liveBuses, loading } = useMyBusRealtime({
+    role: 'user',
+    onBusApproaching: handleBusApproaching,
+  });
+
   return (
     <UserPortal
       timings={timings}
@@ -70,6 +98,8 @@ function UserPortalContainer({
       lang={lang}
       onToggleLang={onToggleLang}
       onOpenOperations={onOpenOperations}
+      approachingAlert={approachingEvent?.alert ?? null}
+      onDismissApproachingAlert={() => setApproachingEvent(null)}
     />
   );
 }

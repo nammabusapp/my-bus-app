@@ -5,6 +5,7 @@ import fs from 'fs';
 import http from 'http';
 import path from 'path';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import * as webpush from 'web-push';
 import { WebSocket, WebSocketServer } from 'ws';
 
 // Load .env if present (so local/user-configured .env works cleanly)
@@ -52,11 +53,18 @@ interface LiveBus {
   updatedAt: number;
 }
 
+type DriverRegistrationStatus = 'pending' | 'approved' | 'rejected';
+
 interface DriverAccount {
   driverId: string;
   name: string;
   busNo: string;
   pin: string;
+  licenseNumber: string;
+  licenseImage: string;
+  status: DriverRegistrationStatus;
+  createdAt: number;
+  reviewedAt?: number | null;
 }
 
 interface StoreData {
@@ -67,12 +75,70 @@ interface StoreData {
 const PORT = Number(process.env.PORT || 3000);
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const STORE_PATH = path.join(DATA_DIR, 'store.json');
+const VAPID_PATH = path.join(DATA_DIR, 'vapid.json');
 const TOKEN_SECRET =
   process.env.SESSION_SECRET ||
   crypto.createHash('sha256').update(process.cwd() + '_mybus_secret').digest('hex');
 
 const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || 'admin@mybus.app').toLowerCase();
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
+const VAPID_SUBJECT = process.env.VAPID_SUBJECT?.trim() || 'mailto:admin@mybus.app';
+
+interface VapidKeysConfig {
+  publicKey: string;
+  privateKey: string;
+}
+
+function loadOrCreateVapidKeys(): VapidKeysConfig {
+  const envPub = process.env.VAPID_PUBLIC_KEY?.trim();
+  const envPriv = process.env.VAPID_PRIVATE_KEY?.trim();
+  if (envPub && envPriv) {
+    return { publicKey: envPub, privateKey: envPriv };
+  }
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    if (fs.existsSync(VAPID_PATH)) {
+      const raw = JSON.parse(fs.readFileSync(VAPID_PATH, 'utf8')) as Partial<VapidKeysConfig>;
+      if (
+        typeof raw.publicKey === 'string' &&
+        raw.publicKey &&
+        typeof raw.privateKey === 'string' &&
+        raw.privateKey
+      ) {
+        return { publicKey: raw.publicKey, privateKey: raw.privateKey };
+      }
+    }
+    const generated = webpush.generateVAPIDKeys();
+    fs.writeFileSync(VAPID_PATH, JSON.stringify(generated, null, 2), 'utf8');
+    return generated;
+  } catch {
+    return webpush.generateVAPIDKeys();
+  }
+}
+
+function sanitizePushSubscription(raw: unknown): webpush.PushSubscription | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const obj = raw as Record<string, unknown>;
+  const endpoint = typeof obj.endpoint === 'string' ? obj.endpoint.trim() : '';
+  if (!endpoint || endpoint.length > 2048) return null;
+  try {
+    const parsed = new URL(endpoint);
+    if (parsed.protocol !== 'https:') return null;
+  } catch {
+    return null;
+  }
+  const keys = obj.keys as Record<string, unknown> | undefined;
+  if (!keys || typeof keys !== 'object') return null;
+  const p256dh = typeof keys.p256dh === 'string' ? keys.p256dh.trim() : '';
+  const auth = typeof keys.auth === 'string' ? keys.auth.trim() : '';
+  if (!p256dh || !auth || p256dh.length > 512 || auth.length > 256) return null;
+  return {
+    endpoint,
+    keys: { p256dh, auth },
+  };
+}
 
 // Optional Supabase Server Client
 function createSafeSupabaseClient(
@@ -185,10 +251,110 @@ const SEED_TIMINGS: BusTiming[] = [
 ];
 
 const SEED_DRIVERS: DriverAccount[] = [
-  { driverId: 'DRV-101', name: 'Rajendra Rao', busNo: '101-A', pin: '1234' },
-  { driverId: 'DRV-102', name: 'Priya Sharma', busNo: '204-X', pin: '1234' },
-  { driverId: 'DRV-103', name: 'Arjun Menon', busNo: '309-E', pin: '1234' },
+  {
+    driverId: 'DRV-101',
+    name: 'Rajendra Rao',
+    busNo: '101-A',
+    pin: '1234',
+    licenseNumber: 'KA01-2019-00101',
+    licenseImage: '',
+    status: 'approved',
+    createdAt: 1700000000000,
+    reviewedAt: 1700000000000,
+  },
+  {
+    driverId: 'DRV-102',
+    name: 'Priya Sharma',
+    busNo: '204-X',
+    pin: '1234',
+    licenseNumber: 'KA01-2020-00204',
+    licenseImage: '',
+    status: 'approved',
+    createdAt: 1700000000000,
+    reviewedAt: 1700000000000,
+  },
+  {
+    driverId: 'DRV-103',
+    name: 'Arjun Menon',
+    busNo: '309-E',
+    pin: '1234',
+    licenseNumber: 'KA05-2021-00309',
+    licenseImage: '',
+    status: 'approved',
+    createdAt: 1700000000000,
+    reviewedAt: 1700000000000,
+  },
 ];
+
+function normalizeDriverStatus(raw: unknown): DriverRegistrationStatus {
+  const normalized = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+  if (
+    normalized === 'approved' ||
+    normalized === 'pending' ||
+    normalized === 'rejected'
+  ) {
+    return normalized;
+  }
+  return 'pending';
+}
+
+function normalizeDriverAccount(d: Partial<DriverAccount>): DriverAccount {
+  return {
+    driverId: String(d.driverId || '').trim().toUpperCase(),
+    name: String(d.name || '').trim(),
+    busNo: String(d.busNo || '').trim().toUpperCase(),
+    pin: String(d.pin || ''),
+    licenseNumber: String(d.licenseNumber || '').trim(),
+    licenseImage: typeof d.licenseImage === 'string' ? d.licenseImage : '',
+    status: normalizeDriverStatus(d.status),
+    createdAt: typeof d.createdAt === 'number' ? d.createdAt : Date.now(),
+    reviewedAt: typeof d.reviewedAt === 'number' ? d.reviewedAt : null,
+  };
+}
+
+function toPublicDriver(d: DriverAccount) {
+  return {
+    driverId: d.driverId,
+    name: d.name,
+    busNo: d.busNo,
+    licenseNumber: d.licenseNumber,
+    licenseImage: d.licenseImage,
+    status: d.status,
+    createdAt: d.createdAt,
+    reviewedAt: d.reviewedAt ?? null,
+  };
+}
+
+function hashPin(pin: string): string {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derived = crypto.scryptSync(pin, salt, 32).toString('hex');
+  return `scrypt$${salt}$${derived}`;
+}
+
+function verifyPin(pin: string, stored: string): boolean {
+  if (stored.startsWith('scrypt$')) {
+    const parts = stored.split('$');
+    if (parts.length !== 3) return false;
+    const [, salt, expectedHex] = parts;
+    const actual = crypto.scryptSync(pin, salt, 32);
+    const expected = Buffer.from(expectedHex, 'hex');
+    if (actual.length !== expected.length) return false;
+    return crypto.timingSafeEqual(actual, expected);
+  }
+  return pin === stored;
+}
+
+function sanitizeLicenseImage(raw: unknown): string | null {
+  if (raw === undefined || raw === null || raw === '') return '';
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+  if (trimmed.length > 1_500_000) return null;
+  if (!/^data:image\/(png|jpeg|jpg|webp);base64,[A-Za-z0-9+/=]+$/i.test(trimmed)) {
+    return null;
+  }
+  return trimmed;
+}
 
 function loadStore(): StoreData {
   try {
@@ -207,7 +373,9 @@ function loadStore(): StoreData {
     const parsed = JSON.parse(raw) as Partial<StoreData>;
     return {
       timings: Array.isArray(parsed.timings) ? parsed.timings : SEED_TIMINGS,
-      drivers: Array.isArray(parsed.drivers) ? parsed.drivers : SEED_DRIVERS,
+      drivers: Array.isArray(parsed.drivers)
+        ? parsed.drivers.map((d) => normalizeDriverAccount(d))
+        : SEED_DRIVERS,
     };
   } catch {
     return { timings: SEED_TIMINGS, drivers: SEED_DRIVERS };
@@ -305,9 +473,27 @@ async function syncDriverToSupabase(driver: DriverAccount) {
     name: driver.name,
     bus_no: driver.busNo,
     pin: driver.pin,
+    license_number: driver.licenseNumber,
+    license_image: driver.licenseImage,
+    status: driver.status,
+    reviewed_at: driver.reviewedAt
+      ? new Date(driver.reviewedAt).toISOString()
+      : null,
+    created_at: new Date(driver.createdAt).toISOString(),
   });
   if (error) {
     console.warn('Supabase drivers upsert error:', error.message);
+    if (error.message.includes('column')) {
+      const { error: fallbackError } = await supabase.from('drivers').upsert({
+        driver_id: driver.driverId,
+        name: driver.name,
+        bus_no: driver.busNo,
+        pin: driver.pin,
+      });
+      if (fallbackError) {
+        console.warn('Supabase legacy drivers upsert error:', fallbackError.message);
+      }
+    }
   }
 }
 
@@ -358,6 +544,31 @@ async function stopLiveBusInSupabase(driverId: string) {
 async function bootstrap() {
   const store = loadStore();
   const liveBuses = new Map<string, LiveBus>();
+  let vapidKeys = loadOrCreateVapidKeys();
+  try {
+    webpush.setVapidDetails(VAPID_SUBJECT, vapidKeys.publicKey, vapidKeys.privateKey);
+  } catch (err) {
+    console.warn('Invalid VAPID env configuration, generating fresh keys:', err);
+    vapidKeys = webpush.generateVAPIDKeys();
+    webpush.setVapidDetails('mailto:admin@mybus.app', vapidKeys.publicKey, vapidKeys.privateKey);
+  }
+
+  interface StopPushAlertRecord {
+    key: string;
+    sessionId: string;
+    driverId: string;
+    busNo: string;
+    stopLabel: string;
+    stopLat: number;
+    stopLng: number;
+    thresholdKm: number;
+    subscription: webpush.PushSubscription | null;
+    notified: boolean;
+    createdAt: number;
+    lastNotifiedAt?: number;
+  }
+  const stopAlerts = new Map<string, StopPushAlertRecord>();
+
   let supabaseTablesReady = false;
   let supabaseStatusMessage: string | null = null;
 
@@ -398,12 +609,34 @@ async function bootstrap() {
         .select('*');
       if (!driversError && driverRows) {
         if (driverRows.length > 0) {
-          store.drivers = driverRows.map((d) => ({
-            driverId: d.driver_id,
-            name: d.name,
-            busNo: d.bus_no,
-            pin: d.pin,
-          }));
+          const previousLocalMap = new Map(
+            store.drivers.map((drv) => [drv.driverId.toUpperCase(), drv])
+          );
+          store.drivers = driverRows.map((d) => {
+            const idNorm = String(d.driver_id || '').trim().toUpperCase();
+            const existingLocal = previousLocalMap.get(idNorm);
+            const resolvedStatus =
+              d.status !== undefined && d.status !== null
+                ? normalizeDriverStatus(d.status)
+                : existingLocal
+                ? existingLocal.status
+                : 'pending';
+            return normalizeDriverAccount({
+              driverId: idNorm,
+              name: d.name,
+              busNo: d.bus_no,
+              pin: d.pin,
+              licenseNumber: d.license_number ?? existingLocal?.licenseNumber ?? '',
+              licenseImage: d.license_image ?? existingLocal?.licenseImage ?? '',
+              status: resolvedStatus,
+              createdAt: d.created_at
+                ? new Date(String(d.created_at)).getTime()
+                : existingLocal?.createdAt ?? Date.now(),
+              reviewedAt: d.reviewed_at
+                ? new Date(String(d.reviewed_at)).getTime()
+                : existingLocal?.reviewedAt ?? null,
+            });
+          });
           saveStore(store);
         } else {
           for (const drv of store.drivers) {
@@ -450,19 +683,94 @@ async function bootstrap() {
   }
 
   const app = express();
-  app.use(express.json());
+  app.use(express.json({ limit: '2mb' }));
 
   const server = http.createServer(app);
-  const wss = new WebSocketServer({ server, path: '/ws' });
+  const wss = new WebSocketServer({ noServer: true });
+
+  server.on('upgrade', (req, socket, head) => {
+    try {
+      const pathname = new URL(
+        req.url || '/',
+        `http://${req.headers.host || 'localhost'}`
+      ).pathname;
+      if (pathname === '/ws') {
+        wss.handleUpgrade(req, socket, head, (ws) => {
+          wss.emit('connection', ws, req);
+        });
+      }
+    } catch {
+      socket.destroy();
+    }
+  });
 
   interface ClientMeta {
     ws: WebSocket;
     role: 'user' | 'driver' | 'admin';
     sessionId: string;
     driverId?: string;
+    authenticatedDriverId?: string;
   }
 
   const clients = new Set<ClientMeta>();
+
+  async function refreshDriverFromDatabase(
+    driverId: string
+  ): Promise<DriverAccount | undefined> {
+    const idNorm = driverId.trim().toUpperCase();
+    const localMatch = store.drivers.find(
+      (d) => d.driverId.toUpperCase() === idNorm
+    );
+    if (!supabase) return localMatch;
+    try {
+      const { data, error } = await supabase
+        .from('drivers')
+        .select('*')
+        .eq('driver_id', idNorm)
+        .maybeSingle();
+      if (error || !data) {
+        return localMatch;
+      }
+      const hydrated = normalizeDriverAccount({
+        driverId: data.driver_id,
+        name: data.name,
+        busNo: data.bus_no,
+        pin: data.pin,
+        licenseNumber: data.license_number ?? localMatch?.licenseNumber ?? '',
+        licenseImage: data.license_image ?? localMatch?.licenseImage ?? '',
+        status:
+          data.status !== undefined && data.status !== null
+            ? normalizeDriverStatus(data.status)
+            : localMatch?.status ?? 'pending',
+        createdAt: data.created_at
+          ? new Date(String(data.created_at)).getTime()
+          : localMatch?.createdAt ?? Date.now(),
+        reviewedAt: data.reviewed_at
+          ? new Date(String(data.reviewed_at)).getTime()
+          : localMatch?.reviewedAt ?? null,
+      });
+      const idx = store.drivers.findIndex(
+        (d) => d.driverId.toUpperCase() === idNorm
+      );
+      if (idx === -1) {
+        store.drivers.push(hydrated);
+      } else {
+        store.drivers[idx] = hydrated;
+      }
+      saveStore(store);
+      return hydrated;
+    } catch {
+      return localMatch;
+    }
+  }
+
+  function isApprovedDriver(driverId: string): boolean {
+    const idNorm = driverId.trim().toUpperCase();
+    const found = store.drivers.find(
+      (d) => d.driverId.toUpperCase() === idNorm
+    );
+    return found !== undefined && found.status === 'approved';
+  }
 
   function getStats() {
     const userSessions = new Set<string>();
@@ -483,6 +791,8 @@ async function bootstrap() {
       totalConnections: userSessions.size + driverSessions.size + adminSessions.size,
       liveBusCount: liveBuses.size,
       timingCount: store.timings.length,
+      pendingDriverCount: store.drivers.filter((d) => d.status === 'pending').length,
+      registeredDriverCount: store.drivers.length,
     };
   }
 
@@ -593,11 +903,108 @@ async function bootstrap() {
     void syncLiveBusToSupabase(updated);
     broadcast({ type: 'bus:update', bus: updated });
     broadcastStats();
+    void evaluateStopAlertsForBus(updated);
     return updated;
+  }
+
+  async function evaluateStopAlertsForBus(bus: LiveBus) {
+    for (const alert of stopAlerts.values()) {
+      if (alert.driverId !== bus.driverId) continue;
+
+      const distanceKm =
+        Math.round(
+          (haversineMeters(bus.lat, bus.lng, alert.stopLat, alert.stopLng) / 1000) *
+            100
+        ) / 100;
+
+      if (alert.notified) {
+        if (distanceKm > alert.thresholdKm * 1.5) {
+          alert.notified = false;
+        }
+        continue;
+      }
+
+      if (distanceKm <= alert.thresholdKm) {
+        alert.notified = true;
+        alert.lastNotifiedAt = Date.now();
+
+        const effectiveSpeed =
+          bus.speedKmh > 6 ? Math.min(bus.speedKmh, 95) : 28;
+        const etaMinutes =
+          distanceKm <= 0.08
+            ? 0
+            : Math.max(1, Math.round(((distanceKm / effectiveSpeed) * 60)));
+        const distLabel =
+          distanceKm < 1
+            ? `${Math.round(distanceKm * 1000)} m`
+            : `${distanceKm.toFixed(1)} km`;
+        const title = `Bus ${bus.busNo} approaching ${alert.stopLabel}`;
+        const body =
+          etaMinutes === 0
+            ? `Arriving now (${distLabel} away)`
+            : `${distLabel} away (~${etaMinutes} min ETA)`;
+        const tag = `mybus-approach-${bus.driverId}-${alert.stopLabel}`;
+
+        const approachingPayload = {
+          driverId: bus.driverId,
+          busNo: bus.busNo,
+          stopLabel: alert.stopLabel,
+          distanceKm,
+          etaMinutes,
+          triggeredAt: Date.now(),
+        };
+
+        for (const c of clients) {
+          if (
+            c.ws.readyState === WebSocket.OPEN &&
+            c.sessionId === alert.sessionId
+          ) {
+            c.ws.send(
+              JSON.stringify({
+                type: 'bus:approaching',
+                alert: approachingPayload,
+                title,
+                body,
+                tag,
+              })
+            );
+          }
+        }
+
+        if (alert.subscription) {
+          try {
+            await webpush.sendNotification(
+              alert.subscription,
+              JSON.stringify({
+                title,
+                body,
+                tag,
+                driverId: bus.driverId,
+                busNo: bus.busNo,
+                stopLabel: alert.stopLabel,
+                distanceKm,
+                etaMinutes,
+                url: `/?track=${encodeURIComponent(bus.driverId)}`,
+              })
+            );
+          } catch (err) {
+            const statusCode = (err as { statusCode?: number })?.statusCode;
+            if (statusCode === 404 || statusCode === 410) {
+              alert.subscription = null;
+            }
+          }
+        }
+      }
+    }
   }
 
   function removeLiveBus(driverId: string, forcedByAdmin = false) {
     const existed = liveBuses.delete(driverId);
+    for (const alert of stopAlerts.values()) {
+      if (alert.driverId === driverId) {
+        alert.notified = false;
+      }
+    }
     if (existed) {
       void stopLiveBusInSupabase(driverId);
       broadcast({ type: 'bus:removed', driverId });
@@ -630,8 +1037,26 @@ async function bootstrap() {
     const sessionId =
       url.searchParams.get('sessionId') || crypto.randomUUID();
     const driverId = url.searchParams.get('driverId') || undefined;
+    const wsTokenParam = url.searchParams.get('token') || '';
+    const decodedDriverToken =
+      role === 'driver' && wsTokenParam
+        ? verifyToken<{ role?: string; driverId?: string }>(wsTokenParam)
+        : null;
+    const authenticatedDriverId =
+      decodedDriverToken &&
+      decodedDriverToken.role === 'driver' &&
+      decodedDriverToken.driverId &&
+      isApprovedDriver(decodedDriverToken.driverId)
+        ? decodedDriverToken.driverId.trim().toUpperCase()
+        : undefined;
 
-    const meta: ClientMeta = { ws, role, sessionId, driverId };
+    const meta: ClientMeta = {
+      ws,
+      role,
+      sessionId,
+      driverId,
+      authenticatedDriverId,
+    };
     clients.add(meta);
 
     ws.send(
@@ -648,20 +1073,26 @@ async function bootstrap() {
       try {
         const msg = JSON.parse(raw.toString());
         if (msg.type === 'driver:register_socket' && msg.driverId) {
-          meta.driverId = String(msg.driverId);
+          const reqId = String(msg.driverId).trim().toUpperCase();
+          if (meta.authenticatedDriverId === reqId && isApprovedDriver(reqId)) {
+            meta.driverId = reqId;
+          }
           return;
         }
         if (msg.type === 'driver:location' && msg.payload) {
           const p = msg.payload;
+          const reqId = String(p.driverId || '').trim().toUpperCase();
           if (
             typeof p.lat === 'number' &&
             typeof p.lng === 'number' &&
-            p.driverId &&
-            p.busNo
+            reqId &&
+            p.busNo &&
+            meta.authenticatedDriverId === reqId &&
+            isApprovedDriver(reqId)
           ) {
-            meta.driverId = String(p.driverId);
+            meta.driverId = reqId;
             upsertLiveBusLocation({
-              driverId: String(p.driverId),
+              driverId: reqId,
               driverName: String(p.driverName || 'Driver'),
               busNo: String(p.busNo),
               startPoint: String(p.startPoint || 'Origin'),
@@ -684,7 +1115,13 @@ async function bootstrap() {
         }
         if (msg.type === 'driver:status' && msg.payload) {
           const p = msg.payload;
-          const existing = p.driverId ? liveBuses.get(String(p.driverId)) : undefined;
+          const reqId = String(p.driverId || '').trim().toUpperCase();
+          const existing =
+            reqId &&
+            meta.authenticatedDriverId === reqId &&
+            isApprovedDriver(reqId)
+              ? liveBuses.get(reqId)
+              : undefined;
           if (existing) {
             const updated: LiveBus = {
               ...existing,
@@ -699,7 +1136,10 @@ async function bootstrap() {
           return;
         }
         if (msg.type === 'driver:stop' && msg.driverId) {
-          removeLiveBus(String(msg.driverId), false);
+          const reqId = String(msg.driverId).trim().toUpperCase();
+          if (meta.authenticatedDriverId === reqId) {
+            removeLiveBus(reqId, false);
+          }
         }
       } catch {
         // Ignore malformed messages
@@ -734,18 +1174,147 @@ async function bootstrap() {
     res.json({ liveBuses: Array.from(liveBuses.values()) });
   });
 
+  // Web Push VAPID Public Key & Stop Proximity Alert Subscriptions
+  app.get('/api/push/public-key', (_req, res) => {
+    res.json({ publicKey: vapidKeys.publicKey });
+  });
+
+  app.post('/api/push/subscribe', async (req, res) => {
+    const {
+      sessionId,
+      driverId,
+      busNo,
+      stopLabel,
+      stopLat,
+      stopLng,
+      thresholdKm,
+      subscription,
+    } = req.body || {};
+
+    const cleanSession = String(sessionId || '').trim();
+    const cleanDriverId = String(driverId || '').trim().toUpperCase();
+    const cleanBusNo = String(busNo || '').trim().slice(0, 40);
+    const cleanStopLabel = String(stopLabel || '').trim().slice(0, 120);
+
+    if (
+      !cleanSession ||
+      cleanSession.length > 128 ||
+      !cleanDriverId ||
+      cleanDriverId.length > 64 ||
+      !cleanStopLabel ||
+      typeof stopLat !== 'number' ||
+      typeof stopLng !== 'number' ||
+      !Number.isFinite(stopLat) ||
+      !Number.isFinite(stopLng) ||
+      stopLat < -90 ||
+      stopLat > 90 ||
+      stopLng < -180 ||
+      stopLng > 180
+    ) {
+      res.status(400).json({
+        error:
+          'Valid sessionId, driverId, stopLabel, and stop coordinates are required.',
+      });
+      return;
+    }
+
+    const numericThreshold =
+      typeof thresholdKm === 'number' && Number.isFinite(thresholdKm)
+        ? Math.min(5, Math.max(0.2, thresholdKm))
+        : 1;
+
+    let cleanSub: webpush.PushSubscription | null = null;
+    if (subscription !== null && subscription !== undefined) {
+      cleanSub = sanitizePushSubscription(subscription);
+      if (!cleanSub) {
+        res.status(400).json({ error: 'Invalid push subscription payload.' });
+        return;
+      }
+    }
+
+    const key = `${cleanSession}:${cleanDriverId}`;
+    const record: StopPushAlertRecord = {
+      key,
+      sessionId: cleanSession,
+      driverId: cleanDriverId,
+      busNo: cleanBusNo || cleanDriverId,
+      stopLabel: cleanStopLabel,
+      stopLat,
+      stopLng,
+      thresholdKm: numericThreshold,
+      subscription: cleanSub,
+      notified: false,
+      createdAt: Date.now(),
+    };
+    stopAlerts.set(key, record);
+
+    const activeBus = liveBuses.get(cleanDriverId);
+    if (activeBus) {
+      void evaluateStopAlertsForBus(activeBus);
+    }
+
+    res.status(201).json({
+      ok: true,
+      pushEnabled: cleanSub !== null,
+      thresholdKm: numericThreshold,
+    });
+  });
+
+  app.post('/api/push/unsubscribe', (req, res) => {
+    const { sessionId, driverId } = req.body || {};
+    const cleanSession = String(sessionId || '').trim();
+    const cleanDriverId = String(driverId || '').trim().toUpperCase();
+    if (!cleanSession) {
+      res.status(400).json({ error: 'sessionId is required.' });
+      return;
+    }
+
+    let removed = 0;
+    if (cleanDriverId) {
+      if (stopAlerts.delete(`${cleanSession}:${cleanDriverId}`)) {
+        removed = 1;
+      }
+    } else {
+      for (const [k, record] of stopAlerts.entries()) {
+        if (record.sessionId === cleanSession) {
+          stopAlerts.delete(k);
+          removed += 1;
+        }
+      }
+    }
+    res.json({ ok: true, removed });
+  });
+
   // Driver Auth
-  app.post('/api/driver/login', (req, res) => {
+  app.post('/api/driver/login', async (req, res) => {
     const { driverId, pin } = req.body || {};
     const idNorm = String(driverId || '').trim().toUpperCase();
     const pinNorm = String(pin || '').trim();
-    const found = store.drivers.find(
-      (d) => d.driverId.toUpperCase() === idNorm && d.pin === pinNorm
-    );
-    if (!found) {
+    if (!idNorm || !pinNorm) {
+      res.status(400).json({ error: 'Driver ID and PIN are required.' });
+      return;
+    }
+
+    const found = await refreshDriverFromDatabase(idNorm);
+    if (!found || !verifyPin(pinNorm, found.pin)) {
       res.status(401).json({ error: 'Invalid Driver ID or PIN.' });
       return;
     }
+    if (found.status !== 'approved') {
+      if (found.status === 'rejected') {
+        res.status(403).json({
+          error:
+            'Your driver registration was rejected by an administrator. Please contact fleet support.',
+        });
+        return;
+      }
+      res.status(403).json({
+        error:
+          'Your registration is pending admin approval. You can log in only after an administrator approves your account.',
+      });
+      return;
+    }
+
     const token = signToken({ role: 'driver', driverId: found.driverId });
     res.json({
       token,
@@ -753,20 +1322,33 @@ async function bootstrap() {
         driverId: found.driverId,
         name: found.name,
         busNo: found.busNo,
+        licenseNumber: found.licenseNumber,
+        status: found.status,
       },
     });
   });
 
   app.post('/api/driver/register', (req, res) => {
-    const { driverId, name, busNo, pin } = req.body || {};
+    const { driverId, name, busNo, pin, licenseNumber, licenseImage } =
+      req.body || {};
     const idNorm = String(driverId || '').trim().toUpperCase();
     const nameNorm = String(name || '').trim();
     const busNorm = String(busNo || '').trim().toUpperCase();
     const pinNorm = String(pin || '').trim();
+    const licenseNorm = String(licenseNumber || '').trim().toUpperCase();
+    const sanitizedImg = sanitizeLicenseImage(licenseImage);
 
-    if (!idNorm || !nameNorm || !busNorm || pinNorm.length < 4) {
+    if (!idNorm || !nameNorm || !busNorm || pinNorm.length < 4 || licenseNorm.length < 4) {
       res.status(400).json({
-        error: 'Driver ID, full name, Bus No., and a 4+ digit PIN are required.',
+        error:
+          'Driver ID, full name, Bus No., Driving Licence No., and a 4+ digit PIN are required.',
+      });
+      return;
+    }
+    if (sanitizedImg === null) {
+      res.status(400).json({
+        error:
+          'Driving licence photo must be a valid PNG, JPG, or WebP image under 1.5 MB.',
       });
       return;
     }
@@ -774,30 +1356,67 @@ async function bootstrap() {
       res.status(409).json({ error: 'That Driver ID is already registered.' });
       return;
     }
+
     const created: DriverAccount = {
       driverId: idNorm,
       name: nameNorm,
       busNo: busNorm,
-      pin: pinNorm,
+      pin: hashPin(pinNorm),
+      licenseNumber: licenseNorm,
+      licenseImage: sanitizedImg,
+      status: 'pending',
+      createdAt: Date.now(),
+      reviewedAt: null,
     };
     store.drivers.push(created);
     saveStore(store);
     void syncDriverToSupabase(created);
+    broadcast({ type: 'drivers:updated' });
+    broadcastStats();
 
-    const token = signToken({ role: 'driver', driverId: created.driverId });
     res.status(201).json({
-      token,
-      driver: {
-        driverId: created.driverId,
-        name: created.name,
-        busNo: created.busNo,
-      },
+      ok: true,
+      pending: true,
+      message:
+        'Registration submitted! Please wait for Admin approval before logging in.',
+      driver: toPublicDriver(created),
     });
   });
 
-  app.post('/api/driver/location', (req, res) => {
+  function requireApprovedDriver(
+    req: express.Request,
+    res: express.Response
+  ): string | null {
+    const authHeader = req.headers.authorization || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+    const decoded = verifyToken<{ role?: string; driverId?: string }>(token);
+    if (!decoded || decoded.role !== 'driver' || !decoded.driverId) {
+      res.status(401).json({ error: 'Driver authorization required.' });
+      return null;
+    }
+    const tokenDriverId = String(decoded.driverId).trim().toUpperCase();
+    if (!isApprovedDriver(tokenDriverId)) {
+      res.status(403).json({
+        error: 'Your driver account is not approved by an administrator.',
+      });
+      return null;
+    }
+    return tokenDriverId;
+  }
+
+  app.post('/api/driver/location', async (req, res) => {
+    const authedDriverId = requireApprovedDriver(req, res);
+    if (!authedDriverId) return;
+
+    const latestDriver = await refreshDriverFromDatabase(authedDriverId);
+    if (!latestDriver || latestDriver.status !== 'approved') {
+      res.status(403).json({
+        error: 'Only approved drivers can share live bus locations.',
+      });
+      return;
+    }
+
     const {
-      driverId,
       driverName,
       busNo,
       startPoint,
@@ -813,12 +1432,8 @@ async function bootstrap() {
       action,
     } = req.body || {};
 
-    if (!driverId) {
-      res.status(400).json({ error: 'driverId is required.' });
-      return;
-    }
     if (action === 'stop') {
-      removeLiveBus(String(driverId), false);
+      removeLiveBus(authedDriverId, false);
       res.json({ ok: true, stopped: true });
       return;
     }
@@ -827,9 +1442,9 @@ async function bootstrap() {
       return;
     }
     const bus = upsertLiveBusLocation({
-      driverId: String(driverId),
-      driverName: String(driverName || 'Driver'),
-      busNo: String(busNo || 'BUS'),
+      driverId: authedDriverId,
+      driverName: String(driverName || latestDriver.name || 'Driver'),
+      busNo: String(busNo || latestDriver.busNo || 'BUS'),
       startPoint: String(startPoint || 'Origin'),
       endPoint: String(endPoint || 'Destination'),
       routeStops: Array.isArray(routeStops) ? routeStops.map(String) : [],
@@ -846,13 +1461,18 @@ async function bootstrap() {
     res.json({ ok: true, bus });
   });
 
-  app.post('/api/driver/status', (req, res) => {
-    const { driverId, busStatus, statusNote } = req.body || {};
-    if (!driverId) {
-      res.status(400).json({ error: 'driverId is required.' });
+  app.post('/api/driver/status', async (req, res) => {
+    const authedDriverId = requireApprovedDriver(req, res);
+    if (!authedDriverId) return;
+
+    const latestDriver = await refreshDriverFromDatabase(authedDriverId);
+    if (!latestDriver || latestDriver.status !== 'approved') {
+      res.status(403).json({ error: 'Only approved drivers can update status.' });
       return;
     }
-    const existing = liveBuses.get(String(driverId));
+
+    const { busStatus, statusNote } = req.body || {};
+    const existing = liveBuses.get(authedDriverId);
     if (!existing) {
       res.json({ ok: true, updated: false });
       return;
@@ -899,6 +1519,67 @@ async function bootstrap() {
 
   app.get('/api/admin/stats', requireAdmin, (_req, res) => {
     res.json({ stats: getStats() });
+  });
+
+  app.get('/api/admin/drivers', requireAdmin, (_req, res) => {
+    const sorted = [...store.drivers]
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .map(toPublicDriver);
+    res.json({ drivers: sorted });
+  });
+
+  app.post('/api/admin/drivers/:driverId/approve', requireAdmin, (req, res) => {
+    const idNorm = String(req.params.driverId || '').trim().toUpperCase();
+    const idx = store.drivers.findIndex(
+      (d) => d.driverId.toUpperCase() === idNorm
+    );
+    if (idx === -1) {
+      res.status(404).json({ error: 'Driver not found.' });
+      return;
+    }
+    const updated: DriverAccount = {
+      ...store.drivers[idx],
+      status: 'approved',
+      reviewedAt: Date.now(),
+    };
+    store.drivers[idx] = updated;
+    saveStore(store);
+    void syncDriverToSupabase(updated);
+    broadcast({ type: 'drivers:updated' });
+    broadcastStats();
+    res.json({ ok: true, driver: toPublicDriver(updated) });
+  });
+
+  app.post('/api/admin/drivers/:driverId/reject', requireAdmin, (req, res) => {
+    const idNorm = String(req.params.driverId || '').trim().toUpperCase();
+    const idx = store.drivers.findIndex(
+      (d) => d.driverId.toUpperCase() === idNorm
+    );
+    if (idx === -1) {
+      res.status(404).json({ error: 'Driver not found.' });
+      return;
+    }
+    const updated: DriverAccount = {
+      ...store.drivers[idx],
+      status: 'rejected',
+      reviewedAt: Date.now(),
+    };
+    store.drivers[idx] = updated;
+    saveStore(store);
+    void syncDriverToSupabase(updated);
+    removeLiveBus(updated.driverId, true);
+    for (const c of clients) {
+      if (
+        c.role === 'driver' &&
+        (c.driverId?.toUpperCase() === idNorm ||
+          c.authenticatedDriverId === idNorm)
+      ) {
+        c.authenticatedDriverId = undefined;
+      }
+    }
+    broadcast({ type: 'drivers:updated' });
+    broadcastStats();
+    res.json({ ok: true, driver: toPublicDriver(updated) });
   });
 
   app.post('/api/admin/stop-bus/:driverId', requireAdmin, (req, res) => {
@@ -1006,7 +1687,12 @@ async function bootstrap() {
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
-        hmr: process.env.DISABLE_HMR !== 'true',
+        allowedHosts: true,
+        hmr:
+          process.env.DISABLE_HMR !== 'true'
+            ? { server, path: '/vite-hmr' }
+            : false,
+        ws: { server, path: '/vite-hmr' },
       },
       appType: 'spa',
     });

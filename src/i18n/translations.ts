@@ -88,8 +88,41 @@ export interface Translations {
   iosInstallTitle: string;
   iosInstallStep1: string;
   iosInstallStep2: string;
+  browserInstallTitle: string;
+  browserInstallStep1: string;
+  browserInstallStep2: string;
+  inAppBrowserHint: string;
+  copyAppLink: string;
+  linkCopied: string;
+  installNowBtn: string;
   close: string;
   offlineMessage: string;
+  drivingLicenseNumber: string;
+  drivingLicensePhoto: string;
+  uploadLicenseHint: string;
+  newDriverRegistrations: string;
+  registeredDrivers: string;
+  approveDriver: string;
+  rejectDriver: string;
+  viewLicense: string;
+  approved: string;
+  pending: string;
+  rejected: string;
+  trackBusBtn: string;
+  trackingActiveBtn: string;
+  selectBusToTrackHint: string;
+  stopAlertTitle: string;
+  stopAlertDesc: string;
+  selectStopLabel: string;
+  currentPinStop: string;
+  alertRadiusLabel: string;
+  enableStopAlert: string;
+  disableStopAlert: string;
+  alertArmedStatus: string;
+  resolvingStop: string;
+  stopGeocodeFailed: string;
+  permissionDeniedHint: string;
+  approachingAlertPrefix: string;
   incidentLabels: Record<BusIncidentStatus, string>;
 }
 
@@ -190,8 +223,46 @@ export const TRANSLATIONS: Record<AppLang, Translations> = {
     iosInstallTitle: 'Install My Bus on iPhone / iPad',
     iosInstallStep1: 'Tap the Share button in the Safari toolbar.',
     iosInstallStep2: 'Scroll down and tap Add to Home Screen.',
+    browserInstallTitle: 'Install My Bus on Your Device',
+    browserInstallStep1: 'Open the browser menu (⋮) in the top corner.',
+    browserInstallStep2: 'Tap "Install app" or "Add to Home screen" to install.',
+    inAppBrowserHint:
+      'If you opened this link inside WhatsApp, Gmail, or another in-app browser, copy the link and open it in Chrome (Android) or Safari (iPhone).',
+    copyAppLink: 'Copy App Link',
+    linkCopied: 'Link Copied!',
+    installNowBtn: 'Install App Now',
     close: 'Close',
     offlineMessage: 'Offline Mode — Showing cached bus schedules.',
+    drivingLicenseNumber: 'Driving Licence Number',
+    drivingLicensePhoto: 'Driving Licence Photo',
+    uploadLicenseHint: 'Upload a clear photo of your driving licence (JPG, PNG, or WebP)',
+    newDriverRegistrations: 'New Driver Registration',
+    registeredDrivers: 'Registered Drivers',
+    approveDriver: 'Approve',
+    rejectDriver: 'Reject',
+    viewLicense: 'View Licence',
+    approved: 'Approved',
+    pending: 'Pending',
+    rejected: 'Rejected',
+    trackBusBtn: 'Track Bus',
+    trackingActiveBtn: 'Tracking',
+    selectBusToTrackHint:
+      'Click "Track Bus" next to any bus in the list to show its live location on the map.',
+    stopAlertTitle: 'Stop Arrival Alert',
+    stopAlertDesc:
+      'Receive a push notification when this bus gets close to your boarding stop.',
+    selectStopLabel: 'Target Stop',
+    currentPinStop: 'My Map / GPS Pin',
+    alertRadiusLabel: 'Alert Distance',
+    enableStopAlert: 'Notify When Approaching',
+    disableStopAlert: 'Disable Alert',
+    alertArmedStatus: 'Alert active',
+    resolvingStop: 'Locating stop...',
+    stopGeocodeFailed:
+      'Could not find exact map coordinates for that stop name. Tap the map to set your pin and select "My Map / GPS Pin".',
+    permissionDeniedHint:
+      'Browser notifications are blocked — you will still see an instant in-app alert banner here.',
+    approachingAlertPrefix: 'Approaching',
     incidentLabels: {
       Normal: 'Normal',
       Delayed: 'Delayed',
@@ -297,8 +368,46 @@ export const TRANSLATIONS: Record<AppLang, Translations> = {
     iosInstallTitle: 'iPhone / iPad ನಲ್ಲಿ ಮೈ ಬಸ್ ಇನ್‌ಸ್ಟಾಲ್ ಮಾಡಿ',
     iosInstallStep1: 'Safari ಟೂಲ್‌ಬಾರ್‌ನಲ್ಲಿರುವ Share ಬಟನ್ ಒತ್ತಿರಿ.',
     iosInstallStep2: 'ಕೆಳಗೆ ಸ್ಕ್ರಾಲ್ ಮಾಡಿ Add to Home Screen ಆಯ್ಕೆಮಾಡಿ.',
+    browserInstallTitle: 'ನಿಮ್ಮ ಫೋನ್‌ನಲ್ಲಿ ಮೈ ಬಸ್ ಇನ್‌ಸ್ಟಾಲ್ ಮಾಡಿ',
+    browserInstallStep1: 'ಬ್ರೌಸರ್ ಮೇಲಿನ ಮೂಲೆಯಲ್ಲಿರುವ ಮೆನು (⋮) ಒತ್ತಿರಿ.',
+    browserInstallStep2: '"Install app" ಅಥವಾ "Add to Home screen" ಆಯ್ಕೆಮಾಡಿ.',
+    inAppBrowserHint:
+      'ನೀವು ಈ ಲಿಂಕ್ ಅನ್ನು WhatsApp ಅಥವಾ ಇತರ ಆ್ಯಪ್ ಒಳಗೆ ತೆರೆದಿದ್ದರೆ, ಲಿಂಕ್ ಕಾಪಿ ಮಾಡಿ Chrome (Android) ಅಥವಾ Safari (iPhone) ನಲ್ಲಿ ತೆರೆಯಿರಿ.',
+    copyAppLink: 'ಆ್ಯಪ್ ಲಿಂಕ್ ಕಾಪಿ ಮಾಡಿ',
+    linkCopied: 'ಲಿಂಕ್ ಕಾಪಿಯಾಗಿದೆ!',
+    installNowBtn: 'ಈಗಲೇ ಇನ್‌ಸ್ಟಾಲ್ ಮಾಡಿ',
     close: 'ಮುಚ್ಚಿ',
     offlineMessage: 'ಆಫ್‌ಲೈನ್ ಮೋಡ್ — ಉಳಿಸಿದ ವೇಳಾಪಟ್ಟಿ ತೋರಿಸಲಾಗುತ್ತಿದೆ.',
+    drivingLicenseNumber: 'ಡ್ರೈವಿಂಗ್ ಲೈಸೆನ್ಸ್ ಸಂಖ್ಯೆ',
+    drivingLicensePhoto: 'ಡ್ರೈವಿಂಗ್ ಲೈಸೆನ್ಸ್ ಫೋಟೋ',
+    uploadLicenseHint: 'ನಿಮ್ಮ ಡ್ರೈವಿಂಗ್ ಲೈಸೆನ್ಸ್‌ನ ಸ್ಪಷ್ಟ ಫೋಟೋ ಅಪ್‌ಲೋಡ್ ಮಾಡಿ (JPG, PNG, WebP)',
+    newDriverRegistrations: 'ಹೊಸ ಚಾಲಕರ ನೋಂದಣಿ',
+    registeredDrivers: 'ನೋಂದಾಯಿತ ಚಾಲಕರು',
+    approveDriver: 'ಅನುಮೋದಿಸಿ',
+    rejectDriver: 'ತಿರಸ್ಕರಿಸಿ',
+    viewLicense: 'ಲೈಸೆನ್ಸ್ ನೋಡಿ',
+    approved: 'ಅನುಮೋದಿಸಲಾಗಿದೆ',
+    pending: 'ಬಾಕಿ ಇದೆ',
+    rejected: 'ತಿರಸ್ಕರಿಸಲಾಗಿದೆ',
+    trackBusBtn: 'ಬಸ್ ಟ್ರ್ಯಾಕ್ ಮಾಡಿ',
+    trackingActiveBtn: 'ಟ್ರ್ಯಾಕ್ ಆಗುತ್ತಿದೆ',
+    selectBusToTrackHint:
+      'ನಕ್ಷೆಯಲ್ಲಿ ಬಸ್‌ನ ನೇರ ಸ್ಥಳವನ್ನು ನೋಡಲು ಪಟ್ಟಿಯಲ್ಲಿರುವ "ಬಸ್ ಟ್ರ್ಯಾಕ್ ಮಾಡಿ" ಬಟನ್ ಒತ್ತಿರಿ.',
+    stopAlertTitle: 'ನಿಲ್ದಾಣದ ಆಗಮನ ಸೂಚನೆ',
+    stopAlertDesc:
+      'ಈ ಬಸ್ ನಿಮ್ಮ ನಿಲ್ದಾಣದ ಸಮೀಪಕ್ಕೆ ಬಂದಾಗ ಪುಶ್ ನೋಟಿಫಿಕೇಶನ್ ಪಡೆಯಿರಿ.',
+    selectStopLabel: 'ನಿಲ್ದಾಣ ಆಯ್ಕೆಮಾಡಿ',
+    currentPinStop: 'ನನ್ನ ನಕ್ಷೆ / GPS ಪಿನ್',
+    alertRadiusLabel: 'ಸೂಚನೆ ದೂರ',
+    enableStopAlert: 'ಹತ್ತಿರ ಬಂದಾಗ ತಿಳಿಸಿ',
+    disableStopAlert: 'ಸೂಚನೆ ನಿಲ್ಲಿಸಿ',
+    alertArmedStatus: 'ಸೂಚನೆ ಸಕ್ರಿಯವಾಗಿದೆ',
+    resolvingStop: 'ನಿಲ್ದಾಣ ಹುಡುಕುತ್ತಿದೆ...',
+    stopGeocodeFailed:
+      'ಆ ನಿಲ್ದಾಣದ ಸ್ಥಳ ಪತ್ತೆಯಾಗಲಿಲ್ಲ. ನಕ್ಷೆಯಲ್ಲಿ ನಿಮ್ಮ ಪಿನ್ ಒತ್ತಿ "ನನ್ನ ನಕ್ಷೆ / GPS ಪಿನ್" ಆಯ್ಕೆಮಾಡಿ.',
+    permissionDeniedHint:
+      'ಬ್ರೌಸರ್ ನೋಟಿಫಿಕೇಶನ್ ನಿರ್ಬಂಧಿಸಲಾಗಿದೆ — ಬದಲಿಗೆ ಇಲ್ಲಿಯೇ ತಕ್ಷಣದ ಸೂಚನೆ ಕಾಣಿಸುತ್ತದೆ.',
+    approachingAlertPrefix: 'ಹತ್ತಿರ ಬರುತ್ತಿದೆ',
     incidentLabels: {
       Normal: 'ಸಾಮಾನ್ಯ',
       Delayed: 'ವಿಳಂಬ',

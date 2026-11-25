@@ -1,3 +1,5 @@
+import { RoadRouteInfo } from '../types';
+
 export function haversineDistanceKm(
   lat1: number,
   lng1: number,
@@ -185,4 +187,48 @@ export async function fetchRoadRoutePolyline(
     // Fallback to direct waypoint segments
   }
   return waypoints.map((w) => [w.lat, w.lng]);
+}
+
+export async function fetchRoadRouteInfo(
+  from: { lat: number; lng: number },
+  to: { lat: number; lng: number },
+  signal?: AbortSignal
+): Promise<RoadRouteInfo | null> {
+  const coordsParam = `${from.lng},${from.lat};${to.lng},${to.lat}`;
+  try {
+    const res = await fetch(
+      `https://router.project-osrm.org/route/v1/driving/${coordsParam}?overview=full&geometries=geojson`,
+      { signal }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    const route = data?.routes?.[0];
+    const geom = route?.geometry?.coordinates as
+      | Array<[number, number]>
+      | undefined;
+    if (!Array.isArray(geom) || geom.length < 2) return null;
+
+    const coordinates = geom.map(
+      ([lng, lat]) => [lat, lng] as [number, number]
+    );
+    const distanceKm =
+      typeof route.distance === 'number'
+        ? Math.round((route.distance / 1000) * 10) / 10
+        : Math.round(haversineDistanceKm(from.lat, from.lng, to.lat, to.lng) * 10) / 10;
+    const durationMinutes =
+      typeof route.duration === 'number'
+        ? distanceKm <= 0.08
+          ? 0
+          : Math.max(1, Math.round(route.duration / 60))
+        : calculateEtaMinutes(distanceKm, 28);
+
+    return {
+      coordinates,
+      distanceKm,
+      durationMinutes,
+      isRoadRoute: true,
+    };
+  } catch {
+    return null;
+  }
 }

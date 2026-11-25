@@ -1,0 +1,53 @@
+{
+  "timings": [
+    {
+      "id": "bt-16c9a5a4",
+      "busNo": "23",
+      "route": "ವೈಟ್‌ಫೀಲ್ಡ್ (Whitefield) — ಯಶವಂತಪುರ (Yeshwanthpur)",
+      "startPoint": "ವೈಟ್‌ಫೀಲ್ಡ್ (Whitefield)",
+      "endPoint": "ಯಶವಂತಪುರ (Yeshwanthpur)",
+      "stops": [
+        "jdieji"
+      ],
+      "departureTime": "08:00",
+      "arrivalTime": "08:45",
+      "frequency": "Every 20 min",
+      "status": "On Time"
+    }
+  ],
+  "drivers": [
+    {
+      "driverId": "1234",
+      "name": "lohit",
+      "busNo": "2345",
+      "pin": "1111",
+      "licenseNumber": "",
+      "licenseImage": "",
+      "status": "approved",
+      "createdAt": 1795116577553,
+      "reviewedAt": null
+    },
+    {
+      "driverId": "544545",
+      "name": "Lohit",
+      "busNo": "285",
+      "pin": "1111",
+      "licenseNumber": "",
+      "licenseImage": "",
+      "status": "approved",
+      "createdAt": 1795250589172,
+      "reviewedAt": null
+    },
+    {
+      "driverId": "101",
+      "name": "Lohit",
+      "busNo": "01",
+      "pin": "2007",
+      "licenseNumber": "",
+      "licenseImage": "",
+      "status": "approved",
+      "createdAt": 1795598771225,
+      "reviewedAt": null
+    }
+  ]
+}

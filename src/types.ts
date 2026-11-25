@@ -43,10 +43,25 @@ export interface LiveBus {
   updatedAt: number;
 }
 
+export type DriverRegistrationStatus = 'pending' | 'approved' | 'rejected';
+
 export interface DriverProfile {
   driverId: string;
   name: string;
   busNo: string;
+  licenseNumber?: string;
+  status?: DriverRegistrationStatus;
+}
+
+export interface DriverRecord {
+  driverId: string;
+  name: string;
+  busNo: string;
+  licenseNumber: string;
+  licenseImage: string;
+  status: DriverRegistrationStatus;
+  createdAt: number;
+  reviewedAt?: number | null;
 }
 
 export interface FleetStats {
@@ -56,6 +71,8 @@ export interface FleetStats {
   totalConnections: number;
   liveBusCount: number;
   timingCount: number;
+  pendingDriverCount?: number;
+  registeredDriverCount?: number;
 }
 
 export interface UserLocation {
@@ -65,9 +82,43 @@ export interface UserLocation {
   source: 'gps' | 'manual';
 }
 
+export interface RoadRouteInfo {
+  coordinates: [number, number][];
+  distanceKm: number;
+  durationMinutes: number;
+  isRoadRoute: boolean;
+}
+
 export type ThemeMode = 'light' | 'dark';
 export type AppLang = 'en' | 'kn';
 export type AppPortal = 'user' | 'operations';
 export type OpsMode = 'driver' | 'admin';
 export type UserSubView = 'home' | 'timings' | 'track';
-export type AdminSubView = 'dashboard' | 'timings' | 'live' | 'users';
+export type AdminSubView =
+  | 'dashboard'
+  | 'timings'
+  | 'live'
+  | 'users'
+  | 'registrations'
+  | 'drivers';
+
+export interface BusApproachingAlert {
+  driverId: string;
+  busNo: string;
+  stopLabel: string;
+  distanceKm: number;
+  etaMinutes: number;
+  triggeredAt: number;
+}
+
+export interface StopAlertRule {
+  driverId: string;
+  busNo: string;
+  stopLabel: string;
+  stopLat: number;
+  stopLng: number;
+  thresholdKm: number;
+  pushEnabled: boolean;
+  createdAt: number;
+}
+

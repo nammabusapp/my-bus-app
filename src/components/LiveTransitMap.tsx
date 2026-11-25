@@ -1,12 +1,20 @@
 import { useEffect, useRef } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { LiveBus, RouteStopPoint, ThemeMode, UserLocation } from '../types';
+import {
+  LiveBus,
+  RoadRouteInfo,
+  RouteStopPoint,
+  ThemeMode,
+  UserLocation,
+} from '../types';
+import { formatEtaText } from '../utils/geo';
 
 interface LiveTransitMapProps {
   userLocation?: UserLocation | null;
   liveBuses: LiveBus[];
   selectedBusId?: string | null;
+  roadRoute?: RoadRouteInfo | null;
   onSelectBus?: (driverId: string) => void;
   onMapClick?: (lat: number, lng: number) => void;
   focusLatLng?: { lat: number; lng: number } | null;
@@ -93,6 +101,7 @@ export function LiveTransitMap({
   userLocation,
   liveBuses,
   selectedBusId,
+  roadRoute,
   onSelectBus,
   onMapClick,
   focusLatLng,
@@ -106,9 +115,12 @@ export function LiveTransitMap({
   const busMarkersRef = useRef<Map<string, L.Marker>>(new Map());
   const stopMarkersRef = useRef<L.Marker[]>([]);
   const userMarkerRef = useRef<L.Marker | null>(null);
+  const userVectorCasingRef = useRef<L.Polyline | null>(null);
   const userVectorRef = useRef<L.Polyline | null>(null);
+  const routeBadgeMarkerRef = useRef<L.Marker | null>(null);
   const routePolylineRef = useRef<L.Polyline | null>(null);
   const hasAutoFittedRef = useRef(false);
+  const lastFittedRoadKeyRef = useRef<string | null>(null);
 
   const onSelectBusRef = useRef(onSelectBus);
   onSelectBusRef.current = onSelectBus;
@@ -158,9 +170,12 @@ export function LiveTransitMap({
       busMarkersRef.current.clear();
       stopMarkersRef.current = [];
       userMarkerRef.current = null;
+      userVectorCasingRef.current = null;
       userVectorRef.current = null;
+      routeBadgeMarkerRef.current = null;
       routePolylineRef.current = null;
       hasAutoFittedRef.current = false;
+      lastFittedRoadKeyRef.current = null;
     };
   }, []);
 
@@ -302,25 +317,77 @@ export function LiveTransitMap({
       }
     }
 
+    if (userVectorCasingRef.current) {
+      userVectorCasingRef.current.remove();
+      userVectorCasingRef.current = null;
+    }
     if (userVectorRef.current) {
       userVectorRef.current.remove();
       userVectorRef.current = null;
     }
+    if (routeBadgeMarkerRef.current) {
+      routeBadgeMarkerRef.current.remove();
+      routeBadgeMarkerRef.current = null;
+    }
 
     const selectedBus = liveBuses.find((b) => b.driverId === selectedBusId);
-    if (selectedBus && userLocation) {
-      userVectorRef.current = L.polyline(
-        [
-          [selectedBus.lat, selectedBus.lng],
-          [userLocation.lat, userLocation.lng],
-        ],
-        {
-          color: theme === 'dark' ? '#60a5fa' : '#2563eb',
-          weight: 3,
-          dashArray: '6, 8',
-          opacity: 0.85,
-        }
-      ).addTo(map);
+    if (
+      selectedBus &&
+      userLocation &&
+      roadRoute &&
+      roadRoute.coordinates.length >= 2
+    ) {
+      userVectorCasingRef.current = L.polyline(roadRoute.coordinates, {
+        color: '#1e1b4b',
+        weight: 9,
+        opacity: 0.35,
+        lineJoin: 'round',
+        lineCap: 'round',
+      }).addTo(map);
+
+      userVectorRef.current = L.polyline(roadRoute.coordinates, {
+        color: theme === 'dark' ? '#60a5fa' : '#1d4ed8',
+        weight: 5,
+        opacity: 0.96,
+        lineJoin: 'round',
+        lineCap: 'round',
+      }).addTo(map);
+
+      const midIdx = Math.floor(roadRoute.coordinates.length / 2);
+      const midPoint = roadRoute.coordinates[midIdx];
+      const etaLabel = formatEtaText(roadRoute.durationMinutes);
+      const distLabel = `${roadRoute.distanceKm.toFixed(1)} km`;
+
+      routeBadgeMarkerRef.current = L.marker(midPoint, {
+        interactive: false,
+        icon: L.divIcon({
+          className: 'mybus-div-icon',
+          iconSize: [120, 44],
+          iconAnchor: [60, 44],
+          html: `
+            <div style="display:flex;flex-direction:column;align-items:center;pointer-events:none;">
+              <div style="background:#1d4ed8;color:#ffffff;padding:5px 10px;border-radius:8px;border:2px solid #ffffff;box-shadow:0 4px 14px rgba(15,23,42,0.38);font-family:'DM Sans',sans-serif;text-align:center;white-space:nowrap;">
+                <div style="font-size:12px;font-weight:700;line-height:1.15;">${etaLabel}</div>
+                <div style="font-family:'JetBrains Mono',monospace;font-size:10px;opacity:0.92;line-height:1.2;">${distLabel}</div>
+              </div>
+              <div style="width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-top:6px solid #1d4ed8;margin-top:-1px;"></div>
+            </div>
+          `,
+        }),
+      }).addTo(map);
+
+      const roadKey = `${selectedBus.driverId}:${userLocation.lat.toFixed(
+        4
+      )},${userLocation.lng.toFixed(4)}`;
+      if (lastFittedRoadKeyRef.current !== roadKey) {
+        map.fitBounds(L.latLngBounds(roadRoute.coordinates), {
+          padding: [56, 56],
+          maxZoom: 15,
+        });
+        lastFittedRoadKeyRef.current = roadKey;
+      }
+    } else {
+      lastFittedRoadKeyRef.current = null;
     }
 
     if (!hasAutoFittedRef.current && (liveBuses.length > 0 || userLocation)) {
@@ -333,7 +400,7 @@ export function LiveTransitMap({
       }
       hasAutoFittedRef.current = true;
     }
-  }, [liveBuses, selectedBusId, userLocation, theme]);
+  }, [liveBuses, selectedBusId, userLocation, roadRoute, theme]);
 
   useEffect(() => {
     const map = mapRef.current;

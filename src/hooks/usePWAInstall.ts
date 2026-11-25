@@ -26,6 +26,7 @@ export function usePWAInstall() {
     useState<BeforeInstallPromptEvent | null>(cachedDeferredPrompt);
   const [isInstalled, setIsInstalled] = useState(false);
   const [isIOS, setIsIOS] = useState(false);
+  const [isInAppOrIframe, setIsInAppOrIframe] = useState(false);
 
   useEffect(() => {
     const checkStandalone = () =>
@@ -40,6 +41,17 @@ export function usePWAInstall() {
       /iphone|ipad|ipod/.test(userAgent) ||
       (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
     setIsIOS(isIOSDevice);
+
+    const isEmbedded = (() => {
+      try {
+        return window.self !== window.top;
+      } catch {
+        return true;
+      }
+    })();
+    const inAppBrowser =
+      /wv|fbav|fban|instagram|line|whatsapp|gsa|micromessenger/.test(userAgent);
+    setIsInAppOrIframe(isEmbedded || inAppBrowser);
 
     const syncPrompt = () => {
       setDeferredPrompt(cachedDeferredPrompt);
@@ -62,24 +74,29 @@ export function usePWAInstall() {
     };
   }, []);
 
-  const install = async () => {
+  const install = async (): Promise<'installed' | 'dismissed' | 'unavailable'> => {
     const promptEvent = deferredPrompt ?? cachedDeferredPrompt;
-    if (!promptEvent) return false;
-    await promptEvent.prompt();
-    const { outcome } = await promptEvent.userChoice;
-    if (outcome === 'accepted') {
-      cachedDeferredPrompt = null;
-      setIsInstalled(true);
-      setDeferredPrompt(null);
-      return true;
+    if (!promptEvent) return 'unavailable';
+    try {
+      await promptEvent.prompt();
+      const { outcome } = await promptEvent.userChoice;
+      if (outcome === 'accepted') {
+        cachedDeferredPrompt = null;
+        setIsInstalled(true);
+        setDeferredPrompt(null);
+        return 'installed';
+      }
+      return 'dismissed';
+    } catch {
+      return 'unavailable';
     }
-    return false;
   };
 
   return {
     isInstallable: !!deferredPrompt,
     isInstalled,
     isIOS,
+    isInAppOrIframe,
     install,
   };
 }

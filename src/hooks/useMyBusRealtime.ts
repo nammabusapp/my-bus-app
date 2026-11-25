@@ -1,19 +1,30 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { isSupabaseClientConfigured, supabase } from '../lib/supabase';
 import {
+  BusApproachingAlert,
   BusIncidentStatus,
   BusTiming,
   FleetStats,
   LiveBus,
 } from '../types';
 
+export interface BusApproachingEventPayload {
+  alert: BusApproachingAlert;
+  title: string;
+  body: string;
+  tag: string;
+}
+
 interface UseMyBusRealtimeOptions {
   role: 'user' | 'driver' | 'admin';
   driverId?: string;
+  driverToken?: string | null;
   onForceStopped?: (reason: string) => void;
+  onDriversUpdated?: () => void;
+  onBusApproaching?: (payload: BusApproachingEventPayload) => void;
 }
 
-function getSessionId(): string {
+export function getSessionId(): string {
   const key = 'mybus_session_id';
   let id = sessionStorage.getItem(key);
   if (!id) {
@@ -29,7 +40,10 @@ function getSessionId(): string {
 export function useMyBusRealtime({
   role,
   driverId,
+  driverToken,
   onForceStopped,
+  onDriversUpdated,
+  onBusApproaching,
 }: UseMyBusRealtimeOptions) {
   const [timings, setTimings] = useState<BusTiming[]>([]);
   const [liveBuses, setLiveBuses] = useState<LiveBus[]>([]);
@@ -40,6 +54,8 @@ export function useMyBusRealtime({
     totalConnections: 0,
     liveBusCount: 0,
     timingCount: 0,
+    pendingDriverCount: 0,
+    registeredDriverCount: 0,
   });
   const [loading, setLoading] = useState(true);
   const [connected, setConnected] = useState(false);
@@ -47,6 +63,10 @@ export function useMyBusRealtime({
   const wsRef = useRef<WebSocket | null>(null);
   const onForceStoppedRef = useRef(onForceStopped);
   onForceStoppedRef.current = onForceStopped;
+  const onDriversUpdatedRef = useRef(onDriversUpdated);
+  onDriversUpdatedRef.current = onDriversUpdated;
+  const onBusApproachingRef = useRef(onBusApproaching);
+  onBusApproachingRef.current = onBusApproaching;
 
   const fetchInitialHttp = useCallback(async () => {
     try {
@@ -83,6 +103,7 @@ export function useMyBusRealtime({
       const sessionId = getSessionId();
       const params = new URLSearchParams({ role, sessionId });
       if (driverId) params.set('driverId', driverId);
+      if (role === 'driver' && driverToken) params.set('token', driverToken);
 
       const ws = new WebSocket(
         `${protocol}//${window.location.host}/ws?${params.toString()}`
@@ -124,6 +145,15 @@ export function useMyBusRealtime({
             );
           } else if (msg.type === 'stats:update' && msg.stats) {
             setStats(msg.stats);
+          } else if (msg.type === 'drivers:updated') {
+            onDriversUpdatedRef.current?.();
+          } else if (msg.type === 'bus:approaching' && msg.alert) {
+            onBusApproachingRef.current?.({
+              alert: msg.alert as BusApproachingAlert,
+              title: String(msg.title || ''),
+              body: String(msg.body || ''),
+              tag: String(msg.tag || `mybus-approach-${msg.alert.driverId}`),
+            });
           } else if (msg.type === 'driver:force_stopped') {
             onForceStoppedRef.current?.(
               msg.reason || 'Live sharing was stopped by administrator.'
@@ -152,7 +182,7 @@ export function useMyBusRealtime({
       wsRef.current?.close();
       wsRef.current = null;
     };
-  }, [role, driverId]);
+  }, [role, driverId, driverToken]);
 
   useEffect(() => {
     if (!isSupabaseClientConfigured || !supabase) return;
@@ -255,10 +285,13 @@ export function useMyBusRealtime({
         wsRef.current.send(
           JSON.stringify({ type: 'driver:location', payload })
         );
-      } else {
+      } else if (driverToken) {
         await fetch('/api/driver/location', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${driverToken}`,
+          },
           body: JSON.stringify(payload),
         });
       }
@@ -287,7 +320,7 @@ export function useMyBusRealtime({
         });
       }
     },
-    []
+    [driverToken]
   );
 
   const sendDriverStatus = useCallback(
@@ -299,11 +332,16 @@ export function useMyBusRealtime({
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
         wsRef.current.send(JSON.stringify({ type: 'driver:status', payload }));
       }
-      await fetch('/api/driver/status', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
+      if (driverToken) {
+        await fetch('/api/driver/status', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${driverToken}`,
+          },
+          body: JSON.stringify(payload),
+        });
+      }
       if (isSupabaseClientConfigured && supabase) {
         void supabase
           .from('live_buses')
@@ -315,25 +353,33 @@ export function useMyBusRealtime({
           .eq('driver_id', payload.driverId);
       }
     },
-    []
+    [driverToken]
   );
 
-  const sendDriverStop = useCallback(async (id: string) => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'driver:stop', driverId: id }));
-    }
-    await fetch('/api/driver/location', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ driverId: id, action: 'stop' }),
-    });
-    if (isSupabaseClientConfigured && supabase) {
-      void supabase
-        .from('live_buses')
-        .update({ is_active: false, updated_at: new Date().toISOString() })
-        .eq('driver_id', id);
-    }
-  }, []);
+  const sendDriverStop = useCallback(
+    async (id: string) => {
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: 'driver:stop', driverId: id }));
+      }
+      if (driverToken) {
+        await fetch('/api/driver/location', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${driverToken}`,
+          },
+          body: JSON.stringify({ driverId: id, action: 'stop' }),
+        });
+      }
+      if (isSupabaseClientConfigured && supabase) {
+        void supabase
+          .from('live_buses')
+          .update({ is_active: false, updated_at: new Date().toISOString() })
+          .eq('driver_id', id);
+      }
+    },
+    [driverToken]
+  );
 
   return {
     timings,

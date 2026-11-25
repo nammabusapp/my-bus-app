@@ -42,8 +42,18 @@ create table if not exists public.drivers (
   name text not null,
   bus_no text not null,
   pin text not null,
+  license_number text not null default '',
+  license_image text not null default '',
+  status text not null default 'approved',
+  reviewed_at timestamptz,
   created_at timestamptz not null default now()
 );
+
+-- Upgrade existing drivers table safely if created earlier
+alter table public.drivers add column if not exists license_number text not null default '';
+alter table public.drivers add column if not exists license_image text not null default '';
+alter table public.drivers add column if not exists status text not null default 'approved';
+alter table public.drivers add column if not exists reviewed_at timestamptz;
 
 -- Grant schema & table permissions to Supabase API roles (anon / authenticated)
 grant usage on schema public to anon, authenticated;

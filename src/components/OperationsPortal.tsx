@@ -2,11 +2,16 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowLeft,
+  BadgeCheck,
   Bus,
   CheckCircle2,
   Clock,
   Compass,
+  CreditCard,
   Edit3,
+  Eye,
+  FileCheck,
+  ImagePlus,
   Keyboard,
   LogOut,
   MapPin,
@@ -16,7 +21,10 @@ import {
   ShieldCheck,
   Square,
   Trash2,
+  UserCheck,
+  UserPlus,
   Users,
+  UserX,
   X,
 } from 'lucide-react';
 import { useMyBusRealtime } from '../hooks/useMyBusRealtime';
@@ -27,6 +35,7 @@ import {
   BusIncidentStatus,
   BusTiming,
   DriverProfile,
+  DriverRecord,
   LiveBus,
   OpsMode,
   ThemeMode,
@@ -39,6 +48,45 @@ import { LanguageToggle } from './LanguageToggle';
 import { LiveTransitMap } from './LiveTransitMap';
 import { PWAInstallButton } from './PWAInstallButton';
 import { ThemeToggle } from './ThemeToggle';
+import heroBusImage from '../assets/images/hero_modern_bus_1795111364827.jpg';
+
+function isSafeDataImageUrl(value: string): boolean {
+  return /^data:image\/(png|jpeg|jpg|webp);base64,[A-Za-z0-9+/=]+$/i.test(
+    value.trim()
+  );
+}
+
+async function compressLicenseImage(file: File): Promise<string> {
+  if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+    throw new Error('Please upload a PNG, JPG, or WebP image.');
+  }
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = () => reject(new Error('Could not read image file.'));
+      el.src = objectUrl;
+    });
+    const maxDim = 1000;
+    const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+    const width = Math.max(1, Math.round(img.width * scale));
+    const height = Math.max(1, Math.round(img.height * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('Canvas unavailable.');
+    ctx.drawImage(img, 0, 0, width, height);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
+    if (dataUrl.length > 1_400_000) {
+      throw new Error('Image is still too large after compression.');
+    }
+    return dataUrl;
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
 
 type DriverStep = 'login' | 'permission' | 'route';
 
@@ -106,25 +154,21 @@ export function OperationsPortal({
   }, [initialMode]);
 
   // --- DRIVER STATE ---
-  const [driver, setDriver] = useState<DriverProfile | null>(() => {
-    try {
-      const saved = sessionStorage.getItem('mybus_driver_profile');
-      return saved ? (JSON.parse(saved) as DriverProfile) : null;
-    } catch {
-      return null;
-    }
-  });
-  const [driverStep, setDriverStep] = useState<DriverStep>(() =>
-    driver ? 'permission' : 'login'
-  );
+  const [driver, setDriver] = useState<DriverProfile | null>(null);
+  const [driverToken, setDriverToken] = useState<string | null>(null);
+  const [driverStep, setDriverStep] = useState<DriverStep>('login');
   const [driverAuthMode, setDriverAuthMode] = useState<'login' | 'register'>(
     'login'
   );
-  const [driverIdInput, setDriverIdInput] = useState('DRV-101');
-  const [pinInput, setPinInput] = useState('1234');
+  const [driverIdInput, setDriverIdInput] = useState('');
+  const [pinInput, setPinInput] = useState('');
   const [nameInput, setNameInput] = useState('');
   const [busNoInput, setBusNoInput] = useState('');
+  const [licenseNumberInput, setLicenseNumberInput] = useState('');
+  const [licenseImageData, setLicenseImageData] = useState('');
+  const [licenseUploadError, setLicenseUploadError] = useState<string | null>(null);
   const [driverAuthError, setDriverAuthError] = useState<string | null>(null);
+  const [driverAuthNotice, setDriverAuthNotice] = useState<string | null>(null);
   const [driverAuthLoading, setDriverAuthLoading] = useState(false);
 
   const [permissionStatus, setPermissionStatus] = useState<
@@ -171,6 +215,14 @@ export function OperationsPortal({
     null
   );
   const [adminActionMsg, setAdminActionMsg] = useState<string | null>(null);
+  const [driversList, setDriversList] = useState<DriverRecord[]>([]);
+  const [driversLoading, setDriversLoading] = useState(false);
+  const [driverFilter, setDriverFilter] = useState<
+    'all' | 'approved' | 'pending' | 'rejected'
+  >('all');
+  const [previewLicenseDriver, setPreviewLicenseDriver] =
+    useState<DriverRecord | null>(null);
+  const [reviewingDriverId, setReviewingDriverId] = useState<string | null>(null);
 
   const [editorOpen, setEditorOpen] = useState(false);
   const [formState, setFormState] = useState<TimingFormState>(EMPTY_FORM);
@@ -209,6 +261,39 @@ export function OperationsPortal({
     [stopGpsWatch]
   );
 
+  const handleAdminLogout = useCallback(() => {
+    sessionStorage.removeItem('mybus_admin_token');
+    sessionStorage.removeItem('mybus_admin_email');
+    setAdminToken(null);
+    setAdminEmail('');
+    setDriversList([]);
+    setAdminSubView('dashboard');
+  }, []);
+
+  const fetchAdminDrivers = useCallback(async () => {
+    if (!adminToken) return;
+    setDriversLoading(true);
+    try {
+      const res = await fetch('/api/admin/drivers', {
+        headers: { Authorization: `Bearer ${adminToken}` },
+      });
+      if (res.status === 401) {
+        handleAdminLogout();
+        return;
+      }
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.drivers)) {
+          setDriversList(data.drivers);
+        }
+      }
+    } catch {
+      // Handled gracefully
+    } finally {
+      setDriversLoading(false);
+    }
+  }, [adminToken, handleAdminLogout]);
+
   const {
     timings,
     liveBuses,
@@ -220,8 +305,20 @@ export function OperationsPortal({
   } = useMyBusRealtime({
     role: mode === 'driver' ? 'driver' : 'admin',
     driverId: driver?.driverId,
+    driverToken,
     onForceStopped: handleForceStopped,
+    onDriversUpdated: () => {
+      if (adminToken) {
+        void fetchAdminDrivers();
+      }
+    },
   });
+
+  useEffect(() => {
+    if (adminToken) {
+      void fetchAdminDrivers();
+    }
+  }, [adminToken, fetchAdminDrivers]);
 
   useEffect(() => {
     return () => {
@@ -229,10 +326,27 @@ export function OperationsPortal({
     };
   }, [stopGpsWatch]);
 
+  const handleLicenseFileChange = async (
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = e.target.files?.[0];
+    setLicenseUploadError(null);
+    if (!file) return;
+    try {
+      const compressed = await compressLicenseImage(file);
+      setLicenseImageData(compressed);
+    } catch (err) {
+      setLicenseUploadError(
+        err instanceof Error ? err.message : 'Invalid driving licence image.'
+      );
+    }
+  };
+
   // --- DRIVER AUTH & GPS PERMISSION ---
   const handleDriverAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setDriverAuthError(null);
+    setDriverAuthNotice(null);
     setDriverAuthLoading(true);
     try {
       const endpoint =
@@ -247,6 +361,8 @@ export function OperationsPortal({
               name: nameInput,
               busNo: busNoInput,
               pin: pinInput,
+              licenseNumber: licenseNumberInput,
+              licenseImage: licenseImageData,
             };
       const res = await fetch(endpoint, {
         method: 'POST',
@@ -259,10 +375,32 @@ export function OperationsPortal({
         setDriverAuthLoading(false);
         return;
       }
-      sessionStorage.setItem(
-        'mybus_driver_profile',
-        JSON.stringify(data.driver)
-      );
+
+      // New registrations require Admin approval before login
+      if (data.pending || driverAuthMode === 'register') {
+        setDriverAuthNotice(
+          data.message ||
+            'Registration submitted! You can log in after Admin approves your driving licence.'
+        );
+        setNameInput('');
+        setBusNoInput('');
+        setLicenseNumberInput('');
+        setLicenseImageData('');
+        setPinInput('');
+        setDriverAuthMode('login');
+        setDriverAuthLoading(false);
+        return;
+      }
+
+      if (!data.token || !data.driver || data.driver.status !== 'approved') {
+        setDriverAuthError(
+          'Your registration is not approved yet. Please wait for Admin approval before logging in.'
+        );
+        setDriverAuthLoading(false);
+        return;
+      }
+
+      setDriverToken(data.token);
       setDriver(data.driver);
       setDriverStep('permission');
     } catch {
@@ -480,6 +618,7 @@ export function OperationsPortal({
       await handleStopSharing();
     }
     sessionStorage.removeItem('mybus_driver_profile');
+    setDriverToken(null);
     setDriver(null);
     setDriverStep('login');
   };
@@ -513,12 +652,41 @@ export function OperationsPortal({
     }
   };
 
-  const handleAdminLogout = () => {
-    sessionStorage.removeItem('mybus_admin_token');
-    sessionStorage.removeItem('mybus_admin_email');
-    setAdminToken(null);
-    setAdminEmail('');
-    setAdminSubView('dashboard');
+  const handleDriverDecision = async (
+    driverId: string,
+    decision: 'approve' | 'reject'
+  ) => {
+    if (!adminToken) return;
+    setReviewingDriverId(driverId);
+    setAdminActionMsg(null);
+    try {
+      const res = await fetch(
+        `/api/admin/drivers/${encodeURIComponent(driverId)}/${decision}`,
+        {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${adminToken}` },
+        }
+      );
+      if (res.status === 401) {
+        handleAdminLogout();
+        return;
+      }
+      const data = await res.json();
+      if (!res.ok) {
+        setAdminActionMsg(data.error || 'Failed to update driver status.');
+      } else {
+        setAdminActionMsg(
+          decision === 'approve'
+            ? `Approved driver ${driverId}. They can now log in.`
+            : `Rejected driver ${driverId}.`
+        );
+        await fetchAdminDrivers();
+      }
+    } catch {
+      setAdminActionMsg('Network error updating driver registration.');
+    } finally {
+      setReviewingDriverId(null);
+    }
   };
 
   const handleStopDriverSharing = async (driverId: string, busNo: string) => {
@@ -727,7 +895,7 @@ export function OperationsPortal({
                   </p>
                 </div>
 
-                <div className="flex gap-1 p-1 bg-slate-100 dark:bg-slate-950 rounded-lg mb-5">
+                <div className="flex gap-2 p-1 bg-slate-100 dark:bg-slate-950 rounded-lg mb-5">
                   <button
                     type="button"
                     onClick={() => {
@@ -747,6 +915,7 @@ export function OperationsPortal({
                     onClick={() => {
                       setDriverAuthMode('register');
                       setDriverAuthError(null);
+                      setDriverAuthNotice(null);
                     }}
                     className={`flex-1 py-2 text-xs font-semibold rounded-md transition-colors cursor-pointer ${
                       driverAuthMode === 'register'
@@ -758,6 +927,13 @@ export function OperationsPortal({
                   </button>
                 </div>
 
+                {driverAuthNotice && (
+                  <div className="mb-4 p-3.5 rounded-xl border border-emerald-200 dark:border-emerald-900/70 bg-emerald-50 dark:bg-emerald-950/40 text-xs sm:text-sm text-emerald-800 dark:text-emerald-200 flex items-start gap-2.5">
+                    <FileCheck className="w-4 h-4 shrink-0 mt-0.5 text-emerald-600 dark:text-emerald-400" />
+                    <span>{driverAuthNotice}</span>
+                  </div>
+                )}
+
                 <form onSubmit={handleDriverAuth} className="space-y-4">
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
@@ -768,7 +944,7 @@ export function OperationsPortal({
                       required
                       value={driverIdInput}
                       onChange={(e) => setDriverIdInput(e.target.value)}
-                      placeholder="e.g. DRV-101"
+                      placeholder="e.g. DRV-105"
                       className="w-full min-h-[44px] px-3.5 py-2.5 text-sm font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-600"
                     />
                   </div>
@@ -800,6 +976,67 @@ export function OperationsPortal({
                           placeholder="e.g. 105-B"
                           className="w-full min-h-[44px] px-3.5 py-2.5 text-sm font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-600"
                         />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                          {t.drivingLicenseNumber}
+                        </label>
+                        <div className="relative">
+                          <CreditCard className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                          <input
+                            type="text"
+                            required
+                            value={licenseNumberInput}
+                            onChange={(e) => setLicenseNumberInput(e.target.value)}
+                            placeholder="e.g. KA01-2023-0045123"
+                            className="w-full min-h-[44px] pl-10 pr-3.5 py-2.5 text-sm font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-600"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                          {t.drivingLicensePhoto}
+                        </label>
+                        <label className="flex items-center justify-between gap-3 px-3.5 py-3 rounded-lg border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 hover:border-blue-500 transition-colors cursor-pointer">
+                          <span className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+                            <ImagePlus className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
+                            <span>
+                              {licenseImageData
+                                ? lang === 'kn'
+                                  ? 'ಲೈಸೆನ್ಸ್ ಫೋಟೋ ಲಗತ್ತಿಸಲಾಗಿದೆ (ಬದಲಾಯಿಸಲು ಒತ್ತಿರಿ)'
+                                  : 'Driving licence attached (click to replace)'
+                                : t.uploadLicenseHint}
+                            </span>
+                          </span>
+                          <input
+                            type="file"
+                            accept="image/png,image/jpeg,image/webp"
+                            onChange={handleLicenseFileChange}
+                            className="hidden"
+                          />
+                        </label>
+                        {licenseUploadError && (
+                          <p className="mt-1.5 text-xs text-red-600 dark:text-red-400">
+                            {licenseUploadError}
+                          </p>
+                        )}
+                        {licenseImageData &&
+                          isSafeDataImageUrl(licenseImageData) && (
+                            <div className="mt-2.5 flex items-center justify-between gap-3 p-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950">
+                              <img
+                                src={licenseImageData}
+                                alt="Driving licence preview"
+                                className="h-14 w-24 object-cover rounded-md border border-slate-200 dark:border-slate-700"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setLicenseImageData('')}
+                                className="text-xs font-medium text-red-600 dark:text-red-400 hover:underline px-2 py-1 cursor-pointer"
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          )}
                       </div>
                     </>
                   )}
@@ -836,13 +1073,6 @@ export function OperationsPortal({
                       : t.createDriverAccount}
                   </button>
                 </form>
-
-                <p className="mt-5 pt-4 border-t border-slate-100 dark:border-slate-800 text-xs text-slate-500 dark:text-slate-400">
-                  Demo IDs: <span className="font-mono">DRV-101</span>,{' '}
-                  <span className="font-mono">DRV-102</span>,{' '}
-                  <span className="font-mono">DRV-103</span> (PIN:{' '}
-                  <span className="font-mono">1234</span>)
-                </p>
               </div>
             </div>
           ) : driverStep === 'permission' ? (
@@ -1237,7 +1467,15 @@ export function OperationsPortal({
       {mode === 'admin' && (
         <main className="flex-1 flex flex-col">
           {!adminToken ? (
-            <div className="flex-1 flex items-center justify-center px-4 py-10">
+            <div className="flex-1 flex flex-col items-center justify-center px-4 py-8 sm:py-10 gap-6">
+              <div className="max-w-3xl w-full h-40 sm:h-52 rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 bg-slate-900 shadow-xs">
+                <img
+                  src={heroBusImage}
+                  alt="Modern electric city transit bus on an urban avenue"
+                  className="w-full h-full object-cover object-[50%_62%]"
+                />
+              </div>
+
               <div className="max-w-md w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 sm:p-8 shadow-xs">
                 <div className="w-11 h-11 rounded-xl bg-slate-900 dark:bg-blue-700 text-white flex items-center justify-center mb-5">
                   <ShieldCheck className="w-5 h-5" />
@@ -1300,7 +1538,15 @@ export function OperationsPortal({
               </div>
             </div>
           ) : adminSubView === 'dashboard' ? (
-            <div className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-8 py-8 sm:py-12">
+            <div className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-8 py-6 sm:py-10">
+              <div className="w-full h-44 sm:h-60 md:h-72 rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 bg-slate-900 mb-7 shadow-xs">
+                <img
+                  src={heroBusImage}
+                  alt="Modern electric city transit bus on an urban avenue"
+                  className="w-full h-full object-cover object-[50%_62%]"
+                />
+              </div>
+
               <div className="flex flex-wrap items-center justify-between gap-4 mb-8">
                 <div>
                   <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white mb-1">
@@ -1321,7 +1567,7 @@ export function OperationsPortal({
                 </button>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
                 <button
                   type="button"
                   onClick={() => setAdminSubView('timings')}
@@ -1393,6 +1639,71 @@ export function OperationsPortal({
                       {lang === 'kn'
                         ? 'ಪ್ರಯಾಣಿಕರು, ಚಾಲಕರು ಮತ್ತು ಸಕ್ರಿಯ ಸೆಷನ್‌ಗಳನ್ನು ಪರಿಶೀಲಿಸಿ.'
                         : 'Inspect live connected passengers, drivers, and sessions.'}
+                    </p>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAdminActionMsg(null);
+                    setAdminSubView('registrations');
+                    void fetchAdminDrivers();
+                  }}
+                  className="group text-left bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-amber-500 dark:hover:border-amber-400 rounded-2xl p-6 transition-all shadow-xs cursor-pointer min-h-[172px] flex flex-col justify-between"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="w-11 h-11 rounded-xl bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-400 flex items-center justify-center group-hover:bg-amber-600 group-hover:text-white transition-colors">
+                      <UserPlus className="w-5 h-5" />
+                    </div>
+                    <span
+                      className={`font-mono text-xs font-bold px-2.5 py-1 rounded-md tabular-nums ${
+                        driversList.filter((d) => d.status === 'pending').length > 0
+                          ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+                          : 'text-slate-500 dark:text-slate-400'
+                      }`}
+                    >
+                      {driversList.filter((d) => d.status === 'pending').length}{' '}
+                      {t.pending}
+                    </span>
+                  </div>
+                  <div className="mt-6">
+                    <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-1">
+                      {t.newDriverRegistrations}
+                    </h2>
+                    <p className="text-sm text-slate-600 dark:text-slate-400">
+                      {lang === 'kn'
+                        ? 'ಹೊಸ ಚಾಲಕರ ಡ್ರೈವಿಂಗ್ ಲೈಸೆನ್ಸ್ ಪರಿಶೀಲಿಸಿ ಅನುಮೋದಿಸಿ.'
+                        : 'Review driving licences and approve newly registered drivers.'}
+                    </p>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAdminActionMsg(null);
+                    setAdminSubView('drivers');
+                    void fetchAdminDrivers();
+                  }}
+                  className="group text-left bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-blue-600 dark:hover:border-blue-500 rounded-2xl p-6 transition-all shadow-xs cursor-pointer min-h-[172px] flex flex-col justify-between"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="w-11 h-11 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-400 flex items-center justify-center group-hover:bg-indigo-700 group-hover:text-white transition-colors">
+                      <BadgeCheck className="w-5 h-5" />
+                    </div>
+                    <span className="font-mono text-sm font-semibold text-slate-500 dark:text-slate-400 tabular-nums">
+                      {driversList.length}
+                    </span>
+                  </div>
+                  <div className="mt-6">
+                    <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-1">
+                      {t.registeredDrivers}
+                    </h2>
+                    <p className="text-sm text-slate-600 dark:text-slate-400">
+                      {lang === 'kn'
+                        ? 'ನೋಂದಾಯಿತ ಎಲ್ಲಾ ಚಾಲಕರು ಮತ್ತು ಲೈಸೆನ್ಸ್ ವಿವರಗಳನ್ನು ನೋಡಿ.'
+                        : 'View all registered drivers, licence records, and status.'}
                     </p>
                   </div>
                 </button>
@@ -1679,6 +1990,372 @@ export function OperationsPortal({
                   </section>
                 </div>
               </div>
+            ) : adminSubView === 'registrations' ? (
+              <div className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-8 py-6 sm:py-8">
+                <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAdminActionMsg(null);
+                        setAdminSubView('dashboard');
+                      }}
+                      className="min-w-[44px] min-h-[44px] px-3 rounded-lg border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1.5 text-sm font-medium cursor-pointer"
+                    >
+                      <ArrowLeft className="w-4 h-4" />
+                      <span>{t.back}</span>
+                    </button>
+                    <div>
+                      <h1 className="text-xl font-bold text-slate-900 dark:text-white">
+                        {t.newDriverRegistrations}
+                      </h1>
+                      <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400">
+                        {lang === 'kn'
+                          ? 'ಚಾಲಕರು ಸಲ್ಲಿಸಿದ ಡ್ರೈವಿಂಗ್ ಲೈಸೆನ್ಸ್ ಪರಿಶೀಲಿಸಿ ಅನುಮೋದಿಸಿ.'
+                          : 'Inspect driving licence details and approve or reject new driver signups.'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {adminActionMsg && (
+                  <div className="mb-4 p-3.5 rounded-lg bg-slate-900 dark:bg-blue-950 text-white text-xs sm:text-sm flex items-center justify-between">
+                    <span>{adminActionMsg}</span>
+                    <button
+                      type="button"
+                      onClick={() => setAdminActionMsg(null)}
+                      className="text-slate-300 hover:text-white cursor-pointer"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                )}
+
+                {driversLoading ? (
+                  <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-10 text-center text-sm text-slate-500">
+                    Loading registrations...
+                  </div>
+                ) : driversList.filter((d) => d.status === 'pending').length === 0 ? (
+                  <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-10 text-center">
+                    <UserCheck className="w-9 h-9 text-slate-300 dark:text-slate-700 mx-auto mb-3" />
+                    <p className="text-sm font-semibold text-slate-900 dark:text-white">
+                      {lang === 'kn'
+                        ? 'ಯಾವುದೇ ಹೊಸ ಚಾಲಕ ನೋಂದಣಿ ಬಾಕಿ ಇಲ್ಲ'
+                        : 'No pending driver registrations'}
+                    </p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                      {lang === 'kn'
+                        ? 'ಚಾಲಕರ ಪೋರ್ಟಲ್‌ನಿಂದ ಹೊಸ ಚಾಲಕರು ನೋಂದಾಯಿಸಿದಾಗ ಇಲ್ಲಿ ಕಾಣಿಸುತ್ತದೆ.'
+                        : 'New drivers who sign up from the Driver Portal will appear here with their driving licence.'}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {driversList
+                      .filter((d) => d.status === 'pending')
+                      .map((drv) => {
+                        const busy = reviewingDriverId === drv.driverId;
+                        return (
+                          <div
+                            key={drv.driverId}
+                            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 flex flex-col justify-between gap-4"
+                          >
+                            <div className="space-y-3">
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-mono text-sm font-bold text-blue-700 dark:text-blue-400">
+                                      {drv.driverId}
+                                    </span>
+                                    <span className="text-xs font-semibold px-2 py-0.5 rounded bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+                                      {t.pending}
+                                    </span>
+                                  </div>
+                                  <h3 className="text-base font-bold text-slate-900 dark:text-white mt-1">
+                                    {drv.name}
+                                  </h3>
+                                  <p className="text-xs text-slate-600 dark:text-slate-400">
+                                    Bus No:{' '}
+                                    <span className="font-mono font-semibold text-slate-900 dark:text-slate-200">
+                                      {drv.busNo}
+                                    </span>
+                                  </p>
+                                </div>
+                                <span className="text-[11px] font-mono text-slate-400">
+                                  {new Date(drv.createdAt).toLocaleDateString()}
+                                </span>
+                              </div>
+
+                              <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                                <p className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1">
+                                  {t.drivingLicenseNumber}
+                                </p>
+                                <p className="font-mono text-sm font-bold text-slate-900 dark:text-white">
+                                  {drv.licenseNumber || 'Not provided'}
+                                </p>
+
+                                {drv.licenseImage &&
+                                isSafeDataImageUrl(drv.licenseImage) ? (
+                                  <div className="mt-3 flex items-center justify-between gap-3">
+                                    <img
+                                      src={drv.licenseImage}
+                                      alt={`Driving licence for ${drv.name}`}
+                                      className="h-16 w-28 object-cover rounded-md border border-slate-200 dark:border-slate-700"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => setPreviewLicenseDriver(drv)}
+                                      className="min-h-[38px] px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-200 flex items-center gap-1.5 cursor-pointer"
+                                    >
+                                      <Eye className="w-3.5 h-3.5" />
+                                      <span>{t.viewLicense}</span>
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                                    No licence photo uploaded
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-2.5 pt-2 border-t border-slate-100 dark:border-slate-800">
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() =>
+                                  handleDriverDecision(drv.driverId, 'approve')
+                                }
+                                className="flex-1 min-h-[42px] px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-xs sm:text-sm font-semibold flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+                              >
+                                <UserCheck className="w-4 h-4" />
+                                <span>{t.approveDriver}</span>
+                              </button>
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() =>
+                                  handleDriverDecision(drv.driverId, 'reject')
+                                }
+                                className="min-h-[42px] px-4 py-2 rounded-lg border border-red-200 dark:border-red-900/70 hover:bg-red-50 dark:hover:bg-red-950/40 disabled:opacity-60 text-red-700 dark:text-red-400 text-xs sm:text-sm font-semibold flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+                              >
+                                <UserX className="w-4 h-4" />
+                                <span>{t.rejectDriver}</span>
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                  </div>
+                )}
+              </div>
+            ) : adminSubView === 'drivers' ? (
+              <div className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-8 py-6 sm:py-8">
+                <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAdminActionMsg(null);
+                        setAdminSubView('dashboard');
+                      }}
+                      className="min-w-[44px] min-h-[44px] px-3 rounded-lg border border-slate-200 dark:border-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1.5 text-sm font-medium cursor-pointer"
+                    >
+                      <ArrowLeft className="w-4 h-4" />
+                      <span>{t.back}</span>
+                    </button>
+                    <div>
+                      <h1 className="text-xl font-bold text-slate-900 dark:text-white">
+                        {t.registeredDrivers}
+                      </h1>
+                      <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400">
+                        {lang === 'kn'
+                          ? 'ನೋಂದಾಯಿತ ಎಲ್ಲಾ ಚಾಲಕರು ಮತ್ತು ಅವರ ಲೈಸೆನ್ಸ್ ವಿವರಗಳು.'
+                          : 'Complete directory of all registered drivers and licence verification status.'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-1 rounded-lg">
+                    {(['all', 'approved', 'pending', 'rejected'] as const).map(
+                      (statusKey) => (
+                        <button
+                          key={statusKey}
+                          type="button"
+                          onClick={() => setDriverFilter(statusKey)}
+                          className={`min-h-[34px] px-3 py-1 rounded-md text-xs font-semibold capitalize transition-colors cursor-pointer ${
+                            driverFilter === statusKey
+                              ? 'bg-blue-700 text-white dark:bg-blue-600'
+                              : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                          }`}
+                        >
+                          {statusKey === 'all'
+                            ? t.all
+                            : statusKey === 'approved'
+                            ? t.approved
+                            : statusKey === 'pending'
+                            ? t.pending
+                            : t.rejected}
+                        </button>
+                      )
+                    )}
+                  </div>
+                </div>
+
+                {adminActionMsg && (
+                  <div className="mb-4 p-3.5 rounded-lg bg-slate-900 dark:bg-blue-950 text-white text-xs sm:text-sm flex items-center justify-between">
+                    <span>{adminActionMsg}</span>
+                    <button
+                      type="button"
+                      onClick={() => setAdminActionMsg(null)}
+                      className="text-slate-300 hover:text-white cursor-pointer"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                )}
+
+                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60 text-xs font-semibold text-slate-600 dark:text-slate-400">
+                          <th className="py-3.5 px-4 whitespace-nowrap">
+                            {t.driverId}
+                          </th>
+                          <th className="py-3.5 px-4 whitespace-nowrap">
+                            {t.driverName}
+                          </th>
+                          <th className="py-3.5 px-4 whitespace-nowrap">
+                            {t.assignedBusNo}
+                          </th>
+                          <th className="py-3.5 px-4 whitespace-nowrap">
+                            {t.drivingLicenseNumber}
+                          </th>
+                          <th className="py-3.5 px-4 whitespace-nowrap">
+                            {t.drivingLicensePhoto}
+                          </th>
+                          <th className="py-3.5 px-4 whitespace-nowrap">
+                            {t.status}
+                          </th>
+                          <th className="py-3.5 px-4 text-right whitespace-nowrap">
+                            Actions
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200 dark:divide-slate-800 text-sm">
+                        {driversList
+                          .filter(
+                            (d) =>
+                              driverFilter === 'all' || d.status === driverFilter
+                          )
+                          .map((drv) => {
+                            const isLiveNow = liveBuses.some(
+                              (b) => b.driverId === drv.driverId
+                            );
+                            const busy = reviewingDriverId === drv.driverId;
+                            return (
+                              <tr
+                                key={drv.driverId}
+                                className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40"
+                              >
+                                <td className="py-3.5 px-4 font-mono font-semibold text-slate-900 dark:text-white whitespace-nowrap">
+                                  {drv.driverId}
+                                </td>
+                                <td className="py-3.5 px-4 font-medium text-slate-900 dark:text-white whitespace-nowrap">
+                                  <div className="flex items-center gap-2">
+                                    <span>{drv.name}</span>
+                                    {isLiveNow && (
+                                      <span className="text-[11px] font-semibold px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
+                                        Live
+                                      </span>
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="py-3.5 px-4 font-mono text-slate-800 dark:text-slate-200 whitespace-nowrap">
+                                  {drv.busNo}
+                                </td>
+                                <td className="py-3.5 px-4 font-mono text-slate-700 dark:text-slate-300 whitespace-nowrap">
+                                  {drv.licenseNumber || '—'}
+                                </td>
+                                <td className="py-3.5 px-4 whitespace-nowrap">
+                                  {drv.licenseImage &&
+                                  isSafeDataImageUrl(drv.licenseImage) ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => setPreviewLicenseDriver(drv)}
+                                      className="min-h-[34px] px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold text-blue-700 dark:text-blue-400 inline-flex items-center gap-1.5 cursor-pointer"
+                                    >
+                                      <Eye className="w-3.5 h-3.5" />
+                                      <span>{t.viewLicense}</span>
+                                    </button>
+                                  ) : (
+                                    <span className="text-xs text-slate-400">
+                                      No photo
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="py-3.5 px-4 whitespace-nowrap">
+                                  <span
+                                    className={`text-xs font-semibold px-2.5 py-1 rounded-md ${
+                                      drv.status === 'approved'
+                                        ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                                        : drv.status === 'pending'
+                                        ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+                                        : 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300'
+                                    }`}
+                                  >
+                                    {drv.status === 'approved'
+                                      ? t.approved
+                                      : drv.status === 'pending'
+                                      ? t.pending
+                                      : t.rejected}
+                                  </span>
+                                </td>
+                                <td className="py-3.5 px-4 text-right whitespace-nowrap">
+                                  <div className="inline-flex items-center gap-1.5">
+                                    {drv.status !== 'approved' && (
+                                      <button
+                                        type="button"
+                                        disabled={busy}
+                                        onClick={() =>
+                                          handleDriverDecision(
+                                            drv.driverId,
+                                            'approve'
+                                          )
+                                        }
+                                        className="min-h-[34px] px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold inline-flex items-center gap-1 cursor-pointer"
+                                      >
+                                        <UserCheck className="w-3.5 h-3.5" />
+                                        <span>{t.approveDriver}</span>
+                                      </button>
+                                    )}
+                                    {drv.status !== 'rejected' && (
+                                      <button
+                                        type="button"
+                                        disabled={busy}
+                                        onClick={() =>
+                                          handleDriverDecision(
+                                            drv.driverId,
+                                            'reject'
+                                          )
+                                        }
+                                        className="min-h-[34px] px-2.5 py-1 rounded-lg border border-red-200 dark:border-red-900/60 hover:bg-red-50 dark:hover:bg-red-950/40 text-red-700 dark:text-red-400 text-xs font-semibold inline-flex items-center gap-1 cursor-pointer"
+                                      >
+                                        <UserX className="w-3.5 h-3.5" />
+                                        <span>{t.rejectDriver}</span>
+                                      </button>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
             ) : (
               <div className="flex-1 max-w-5xl w-full mx-auto px-4 sm:px-8 py-6 sm:py-8">
                 <div className="flex items-center gap-3 mb-6">
@@ -1777,6 +2454,73 @@ export function OperationsPortal({
                       {stats.timingCount}
                     </span>
                   </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {previewLicenseDriver && (
+            <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4">
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-lg w-full p-5 sm:p-6 shadow-xl">
+                <div className="flex items-start justify-between gap-3 mb-4">
+                  <div>
+                    <p className="font-mono text-xs font-bold text-blue-700 dark:text-blue-400">
+                      {previewLicenseDriver.driverId} · Bus{' '}
+                      {previewLicenseDriver.busNo}
+                    </p>
+                    <h3 className="text-lg font-bold text-slate-900 dark:text-white">
+                      {previewLicenseDriver.name}
+                    </h3>
+                    <p className="text-xs font-mono text-slate-600 dark:text-slate-400 mt-0.5">
+                      {t.drivingLicenseNumber}:{' '}
+                      {previewLicenseDriver.licenseNumber || '—'}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setPreviewLicenseDriver(null)}
+                    aria-label={t.close}
+                    className="min-w-[40px] min-h-[40px] rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center text-slate-500 cursor-pointer"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                {previewLicenseDriver.licenseImage &&
+                isSafeDataImageUrl(previewLicenseDriver.licenseImage) ? (
+                  <img
+                    src={previewLicenseDriver.licenseImage}
+                    alt={`Driving licence for ${previewLicenseDriver.name}`}
+                    className="w-full max-h-[60vh] object-contain rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950"
+                  />
+                ) : (
+                  <p className="text-sm text-slate-500 py-8 text-center">
+                    No driving licence photo attached.
+                  </p>
+                )}
+
+                <div className="mt-5 flex items-center justify-end gap-2">
+                  {previewLicenseDriver.status !== 'approved' && (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const id = previewLicenseDriver.driverId;
+                        await handleDriverDecision(id, 'approve');
+                        setPreviewLicenseDriver(null);
+                      }}
+                      className="min-h-[40px] px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <UserCheck className="w-4 h-4" />
+                      <span>{t.approveDriver}</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setPreviewLicenseDriver(null)}
+                    className="min-h-[40px] px-4 py-2 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs sm:text-sm font-semibold cursor-pointer"
+                  >
+                    {t.close}
+                  </button>
                 </div>
               </div>
             </div>
