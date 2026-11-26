@@ -21,7 +21,7 @@ export interface BusTiming {
   stops: string[];
   departureTime: string;
   arrivalTime: string;
-  frequency: string;
+  frequency?: string;
   status: 'On Time' | 'Delayed' | 'Scheduled';
 }
 
@@ -32,6 +32,8 @@ export interface LiveBus {
   startPoint: string;
   endPoint: string;
   routeStops: string[];
+  departureTime?: string;
+  reachingTime?: string;
   lat: number;
   lng: number;
   heading: number | null;
@@ -41,6 +43,61 @@ export interface LiveBus {
   statusNote?: string;
   routeCoordinates?: [number, number][];
   updatedAt: number;
+}
+
+export interface DriverPunctualityRecord {
+  id: string;
+  driverId: string;
+  driverName: string;
+  busNo: string;
+  date: string; // YYYY-MM-DD
+  scheduledDeparture: string;
+  actualDeparture: string;
+  scheduledReaching: string;
+  actualReaching?: string;
+  delayMinutes: number;
+  onTime: boolean;
+  busStatus: BusIncidentStatus;
+  updatedAt: number;
+}
+
+export interface DailyPunctualityPoint {
+  date: string;
+  totalTrips: number;
+  onTimeTrips: number;
+  delayedTrips: number;
+  onTimePct: number;
+  avgDelayMin: number;
+}
+
+export interface DriverPerformanceSummary {
+  driverId: string;
+  driverName: string;
+  busNo: string;
+  totalTrips: number;
+  onTimeTrips: number;
+  delayedTrips: number;
+  punctualityPct: number;
+  avgDelayMin: number;
+  maxDelayMin: number;
+  lastTripDate: string;
+}
+
+export interface PerformanceOverviewData {
+  days: number;
+  generatedAt: number;
+  kpis: {
+    overallOnTimePct: number;
+    totalTrips: number;
+    onTimeTrips: number;
+    delayedTrips: number;
+    avgDelayMin: number;
+    activeTrackedDrivers: number;
+    topDriverName: string;
+    topDriverPct: number;
+  };
+  dailySeries: DailyPunctualityPoint[];
+  driverSummaries: DriverPerformanceSummary[];
 }
 
 export type DriverRegistrationStatus = 'pending' | 'approved' | 'rejected';
@@ -62,6 +119,19 @@ export interface DriverRecord {
   status: DriverRegistrationStatus;
   createdAt: number;
   reviewedAt?: number | null;
+}
+
+export interface CompletedTour {
+  id: string;
+  driverId: string;
+  busNo: string;
+  startPoint: string;
+  endPoint: string;
+  routeStops: string[];
+  departureTime?: string;
+  reachingTime?: string;
+  completedCount: number;
+  lastCompletedAt: number;
 }
 
 export interface FleetStats {
@@ -96,6 +166,7 @@ export type OpsMode = 'driver' | 'admin';
 export type UserSubView = 'home' | 'timings' | 'track';
 export type AdminSubView =
   | 'dashboard'
+  | 'performance'
   | 'timings'
   | 'live'
   | 'users'

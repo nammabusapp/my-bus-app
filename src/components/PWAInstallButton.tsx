@@ -72,7 +72,7 @@ export function PWAInstallButton({ lang }: PWAInstallButtonProps) {
               </button>
             </div>
 
-            {isInstallable && (
+            {isInstallable ? (
               <button
                 type="button"
                 onClick={async () => {
@@ -84,9 +84,13 @@ export function PWAInstallButton({ lang }: PWAInstallButtonProps) {
                 <Download className="w-4 h-4" />
                 <span>{t.installNowBtn}</span>
               </button>
+            ) : (
+              <p className="mt-3 text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                {t.directInstallUnavailableHint}
+              </p>
             )}
 
-            <ol className="mt-4 space-y-2.5 text-sm text-slate-600 dark:text-slate-300">
+            <ol className="mt-3 space-y-2.5 text-sm text-slate-600 dark:text-slate-300">
               <li className="flex items-start gap-2">
                 <span className="font-mono font-bold text-blue-700 dark:text-blue-400">
                   1.

@@ -115,16 +115,3 @@ export function transliterateToKannada(input: string): string {
 
   return out;
 }
-
-export const KANNADA_STOP_SUGGESTIONS: string[] = [
-  'ಮೆಜೆಸ್ಟಿಕ್ (Central Station)',
-  'ಸಿಟಿ ಮಾರ್ಕೆಟ್ (City Market)',
-  'ವಿಮಾನ ನಿಲ್ದಾಣ (Airport Terminal 2)',
-  'ಶಿವಾಜಿನಗರ (Shivajinagar)',
-  'ಕೆಂಪೇಗೌಡ ಬಸ್ ನಿಲ್ದಾಣ (KBS)',
-  'ಯಶವಂತಪುರ (Yeshwanthpur)',
-  'ಬನಶಂಕರಿ (Banashankari)',
-  'ಜಯನಗರ (Jayanagar)',
-  'ವೈಟ್‌ಫೀಲ್ಡ್ (Whitefield)',
-  'ಎಲೆಕ್ಟ್ರಾನಿಕ್ ಸಿಟಿ (Electronic City)',
-];

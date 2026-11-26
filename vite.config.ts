@@ -52,12 +52,29 @@ export default defineConfig(() => {
         injectManifest: {
           maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
           globPatterns: ['**/*.{js,css,html,ico,png,svg,jpg,woff,woff2}'],
+          globIgnores: ['assets/aistudio/**'],
         },
         devOptions: {
           enabled: true,
           type: 'module',
         },
       }),
+      {
+        name: 'disable-pwa-dev-hmr-ping',
+        apply: 'serve',
+        transformIndexHtml: {
+          order: 'post',
+          handler(html) {
+            if (process.env.DISABLE_HMR === 'true') {
+              return html.replace(
+                /<script id="vite-plugin-pwa:register-dev-sw"[\s\S]*?<\/script>\s*/i,
+                ''
+              );
+            }
+            return html;
+          },
+        },
+      },
       // Copies src/assets into dist/ so root-relative URLs like
       // "/src/assets/images/..." (e.g. generate_image output) still resolve
       // in production builds. Do not remove.

@@ -40,10 +40,7 @@ import {
   haversineDistanceKm,
   reverseGeocode,
 } from '../utils/geo';
-import {
-  KANNADA_STOP_SUGGESTIONS,
-  transliterateToKannada,
-} from '../utils/kannada';
+import { transliterateToKannada } from '../utils/kannada';
 import {
   getNotificationPermission,
   listenForSWNotificationClicks,
@@ -67,6 +64,97 @@ interface UserPortalProps {
   onOpenOperations: () => void;
   approachingAlert?: BusApproachingAlert | null;
   onDismissApproachingAlert?: () => void;
+}
+
+function parseHHMMToMinutes(hhmm: string): number | null {
+  const match = /^(\d{2}):(\d{2})$/.exec(hhmm.trim());
+  if (!match) return null;
+  const h = Number(match[1]);
+  const m = Number(match[2]);
+  if (h < 0 || h > 23 || m < 0 || m > 59) return null;
+  return h * 60 + m;
+}
+
+function formatMinutesHHMM(totalMinutes: number): string {
+  const norm = ((totalMinutes % 1440) + 1440) % 1440;
+  const h = Math.floor(norm / 60);
+  const m = norm % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+function computeStopScheduleForTiming(
+  item: BusTiming,
+  liveBus?: LiveBus
+): {
+  effectiveDeparture: string;
+  effectiveArrival: string;
+  isLiveAdjusted: boolean;
+  stopTimes: { stop: string; time: string }[];
+} {
+  const orderedStops = [item.startPoint, ...item.stops, item.endPoint];
+  const effectiveDeparture = liveBus?.departureTime || item.departureTime;
+  const effectiveArrival = liveBus?.reachingTime || item.arrivalTime;
+  const isLiveAdjusted = Boolean(
+    liveBus?.departureTime || liveBus?.reachingTime
+  );
+
+  const depMins = parseHHMMToMinutes(effectiveDeparture);
+  const arrMinsRaw = parseHHMMToMinutes(effectiveArrival);
+
+  if (depMins === null || arrMinsRaw === null) {
+    return {
+      effectiveDeparture,
+      effectiveArrival,
+      isLiveAdjusted,
+      stopTimes: orderedStops.map((stop, idx) => ({
+        stop,
+        time:
+          idx === 0
+            ? effectiveDeparture
+            : idx === orderedStops.length - 1
+            ? effectiveArrival
+            : '--:--',
+      })),
+    };
+  }
+
+  const arrMins = arrMinsRaw < depMins ? arrMinsRaw + 1440 : arrMinsRaw;
+  const duration = arrMins - depMins;
+  const totalSegments = Math.max(1, orderedStops.length - 1);
+
+  const stopTimes = orderedStops.map((stop, idx) => {
+    const mins = depMins + Math.round((duration * idx) / totalSegments);
+    return {
+      stop,
+      time: formatMinutesHHMM(mins),
+    };
+  });
+
+  return {
+    effectiveDeparture,
+    effectiveArrival,
+    isLiveAdjusted,
+    stopTimes,
+  };
+}
+
+function findUserLocationArrival(
+  stopTimes: { stop: string; time: string }[],
+  query: string
+): { stop: string; time: string; index: number } | null {
+  const q = query.trim().toLowerCase();
+  if (!q) return null;
+  const exactIdx = stopTimes.findIndex((s) => s.stop.toLowerCase() === q);
+  if (exactIdx !== -1) {
+    return { ...stopTimes[exactIdx], index: exactIdx };
+  }
+  const partialIdx = stopTimes.findIndex((s) =>
+    s.stop.toLowerCase().includes(q)
+  );
+  if (partialIdx !== -1) {
+    return { ...stopTimes[partialIdx], index: partialIdx };
+  }
+  return null;
 }
 
 export function UserPortal({
@@ -231,9 +319,9 @@ export function UserPortal({
     );
   }, []);
 
-  // Collect unique known stop names + Kannada stop suggestions for autocomplete
+  // Collect unique stop names strictly from real schedules and active live buses
   const allKnownStops = useMemo(() => {
-    const set = new Set<string>(KANNADA_STOP_SUGGESTIONS);
+    const set = new Set<string>();
     for (const item of timings) {
       if (item.startPoint) set.add(item.startPoint);
       for (const s of item.stops) {
@@ -241,8 +329,15 @@ export function UserPortal({
       }
       if (item.endPoint) set.add(item.endPoint);
     }
+    for (const bus of liveBuses) {
+      if (bus.startPoint) set.add(bus.startPoint);
+      for (const s of bus.routeStops) {
+        if (s) set.add(s);
+      }
+      if (bus.endPoint) set.add(bus.endPoint);
+    }
     return Array.from(set).sort((a, b) => a.localeCompare(b));
-  }, [timings]);
+  }, [timings, liveBuses]);
 
   // Strict Passing-Through Filtering when Destination is searched:
   // If user searches a destination AND user location is provided, ONLY show buses passing through userLocationQuery on the way to destinationQuery!
@@ -270,10 +365,11 @@ export function UserPortal({
         return fromIndex !== -1 && destIndex !== -1 && fromIndex < destIndex;
       }
 
-      // If only User Location is entered (no destination yet), show buses passing through User Location or matching Bus No.
+      // If only User Location is entered (no destination yet), show buses passing through User Location or matching Bus No. / Route
       if (fromQ) {
         return (
           t.busNo.toLowerCase().includes(fromQ) ||
+          t.route.toLowerCase().includes(fromQ) ||
           orderedStops.some((s) => s.includes(fromQ))
         );
       }
@@ -281,6 +377,14 @@ export function UserPortal({
       return true;
     });
   }, [timings, userLocationQuery, destinationQuery, statusFilter]);
+
+  const hasTimingSearch =
+    userLocationQuery.trim().length > 0 || destinationQuery.trim().length > 0;
+
+  const visibleTimings = useMemo(
+    () => (hasTimingSearch ? filteredTimings : filteredTimings.slice(0, 3)),
+    [filteredTimings, hasTimingSearch]
+  );
 
   const needsLocationForDestSearch =
     destinationQuery.trim().length > 0 && userLocationQuery.trim().length === 0;
@@ -303,6 +407,24 @@ export function UserPortal({
 
     return matching.sort((a, b) => b.updatedAt - a.updatedAt);
   }, [liveBuses, routeQuery]);
+
+  const hasLiveSearch = routeQuery.trim().length > 0;
+
+  const visibleLiveBuses = useMemo(() => {
+    if (hasLiveSearch) return enrichedLiveBuses;
+    if (trackedBusId) {
+      const tracked = enrichedLiveBuses.find(
+        (b) => b.driverId === trackedBusId
+      );
+      if (tracked) {
+        const others = enrichedLiveBuses.filter(
+          (b) => b.driverId !== trackedBusId
+        );
+        return [tracked, ...others].slice(0, 3);
+      }
+    }
+    return enrichedLiveBuses.slice(0, 3);
+  }, [enrichedLiveBuses, hasLiveSearch, trackedBusId]);
 
   const mapBuses = useMemo(
     () =>
@@ -872,23 +994,33 @@ export function UserPortal({
             ) : filteredTimings.length === 0 ? (
               <div className="p-10 text-center">
                 <p className="text-base font-semibold text-slate-900 dark:text-white mb-1">
-                  {lang === 'kn'
-                    ? `"${userLocationQuery}" ಮೂಲಕ ಹಾದುಹೋಗುವ ಬಸ್‌ಗಳು ಕಂಡುಬಂದಿಲ್ಲ`
-                    : `No matching buses passing through "${userLocationQuery}"${
+                  {timings.length === 0
+                    ? lang === 'kn'
+                      ? 'ಇನ್ನೂ ಯಾವುದೇ ಬಸ್ ವೇಳಾಪಟ್ಟಿಗಳನ್ನು ಸೇರಿಸಲಾಗಿಲ್ಲ'
+                      : 'No bus timings have been added yet'
+                    : lang === 'kn'
+                    ? userLocationQuery
+                      ? `"${userLocationQuery}" ಮೂಲಕ ಹಾದುಹೋಗುವ ಬಸ್‌ಗಳು ಕಂಡುಬಂದಿಲ್ಲ`
+                      : 'ಹೊಂದಾಣಿಕೆಯಾಗುವ ಬಸ್‌ಗಳು ಕಂಡುಬಂದಿಲ್ಲ'
+                    : userLocationQuery
+                    ? `No matching buses passing through "${userLocationQuery}"${
                         destinationQuery ? ` toward "${destinationQuery}"` : ''
-                      }`}
+                      }`
+                    : 'No matching buses found'}
                 </p>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setUserLocationQuery('');
-                    setDestinationQuery('');
-                    setStatusFilter('All');
-                  }}
-                  className="mt-3 px-4 py-2 min-h-[44px] text-sm font-medium text-blue-700 dark:text-blue-400 border border-blue-200 dark:border-blue-800 hover:bg-blue-50 dark:hover:bg-blue-950/50 rounded-lg cursor-pointer"
-                >
-                  {t.all}
-                </button>
+                {(userLocationQuery || destinationQuery || statusFilter !== 'All') && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setUserLocationQuery('');
+                      setDestinationQuery('');
+                      setStatusFilter('All');
+                    }}
+                    className="mt-3 px-4 py-2 min-h-[44px] text-sm font-medium text-blue-700 dark:text-blue-400 border border-blue-200 dark:border-blue-800 hover:bg-blue-50 dark:hover:bg-blue-950/50 rounded-lg cursor-pointer"
+                  >
+                    {t.all}
+                  </button>
+                )}
               </div>
             ) : (
               <div className="overflow-x-auto">
@@ -904,25 +1036,46 @@ export function UserPortal({
                       <th className="py-3.5 px-4 whitespace-nowrap">
                         {t.arrivalTime}
                       </th>
+                      <th className="py-3.5 px-4 whitespace-nowrap text-blue-700 dark:text-blue-400">
+                        {userLocationQuery.trim()
+                          ? lang === 'kn'
+                            ? `"${userLocationQuery.trim()}" ಬಳಿ ಆಗಮನ`
+                            : `Arriving at ${userLocationQuery.trim()}`
+                          : t.arrivingAtStopCol}
+                      </th>
                       <th className="py-3.5 px-4 min-w-[220px]">
                         {t.route}
                       </th>
                       <th className="py-3.5 px-4 min-w-[200px]">
                         {t.stopsVia}
                       </th>
-                      <th className="py-3.5 px-4 whitespace-nowrap">
-                        {t.frequency}
-                      </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200 dark:divide-slate-800 text-sm">
-                    {filteredTimings.map((item) => {
+                    {visibleTimings.map((item) => {
                       const isExpanded = expandedTimingId === item.id;
-                      const orderedStops = [
-                        item.startPoint,
-                        ...item.stops,
-                        item.endPoint,
-                      ];
+                      const matchedLive = liveBuses.find((b) => {
+                        if (
+                          b.busNo.trim().toUpperCase() !==
+                          item.busNo.trim().toUpperCase()
+                        ) {
+                          return false;
+                        }
+                        const norm = (s: string) =>
+                          s.trim().replace(/\s+/g, ' ').toLowerCase();
+                        return (
+                          norm(b.startPoint) === norm(item.startPoint) &&
+                          norm(b.endPoint) === norm(item.endPoint)
+                        );
+                      });
+                      const schedule = computeStopScheduleForTiming(
+                        item,
+                        matchedLive
+                      );
+                      const userStopMatch = findUserLocationArrival(
+                        schedule.stopTimes,
+                        userLocationQuery
+                      );
                       const fromQ = userLocationQuery.trim().toLowerCase();
                       const destQ = destinationQuery.trim().toLowerCase();
 
@@ -945,62 +1098,95 @@ export function UserPortal({
                             </span>
                           </td>
                           <td className="py-3.5 px-4 font-mono text-slate-800 dark:text-slate-200 whitespace-nowrap tabular-nums align-top">
-                            {item.departureTime}
+                            {schedule.effectiveDeparture}
                           </td>
                           <td className="py-3.5 px-4 font-mono text-slate-800 dark:text-slate-200 whitespace-nowrap tabular-nums align-top">
-                            {item.arrivalTime}
+                            {schedule.effectiveArrival}
+                          </td>
+                          <td className="py-3.5 px-4 whitespace-nowrap align-top">
+                            {userStopMatch ? (
+                              <div>
+                                <div className="font-mono font-bold text-emerald-700 dark:text-emerald-400 tabular-nums">
+                                  {userStopMatch.time}
+                                </div>
+                                <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                                  at {userStopMatch.stop}
+                                  {schedule.isLiveAdjusted
+                                    ? ` · ${t.liveScheduleBadge}`
+                                    : ''}
+                                </div>
+                              </div>
+                            ) : userLocationQuery.trim() ? (
+                              <span className="font-mono text-xs text-slate-600 dark:text-slate-400 tabular-nums">
+                                {schedule.effectiveDeparture} →{' '}
+                                {schedule.effectiveArrival}
+                              </span>
+                            ) : (
+                              <span className="text-xs text-slate-400 dark:text-slate-500">
+                                {t.enterStopForTime}
+                              </span>
+                            )}
                           </td>
                           <td className="py-3.5 px-4 font-medium text-slate-900 dark:text-white align-top">
                             <div>{item.route}</div>
                             {isExpanded && (
                               <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
-                                {orderedStops.map((stop, idx) => {
-                                  const lower = stop.toLowerCase();
-                                  const isUserStop =
-                                    fromQ && lower.includes(fromQ);
-                                  const isDestStop =
-                                    destQ && lower.includes(destQ);
-                                  return (
-                                    <span
-                                      key={`${stop}-${idx}`}
-                                      className="inline-flex items-center gap-2"
-                                    >
+                                {schedule.stopTimes.map(
+                                  ({ stop, time }, idx) => {
+                                    const lower = stop.toLowerCase();
+                                    const isUserStop =
+                                      fromQ && lower.includes(fromQ);
+                                    const isDestStop =
+                                      destQ && lower.includes(destQ);
+                                    return (
                                       <span
-                                        className={
-                                          isUserStop
-                                            ? 'font-bold text-emerald-700 dark:text-emerald-400 underline'
-                                            : isDestStop
-                                            ? 'font-bold text-blue-700 dark:text-blue-400 underline'
-                                            : idx === 0 ||
-                                              idx === orderedStops.length - 1
-                                            ? 'font-semibold text-slate-900 dark:text-white'
-                                            : ''
-                                        }
+                                        key={`${stop}-${idx}`}
+                                        className="inline-flex items-center gap-2"
                                       >
-                                        {stop}
+                                        <span
+                                          className={
+                                            isUserStop
+                                              ? 'font-bold text-emerald-700 dark:text-emerald-400 underline'
+                                              : isDestStop
+                                              ? 'font-bold text-blue-700 dark:text-blue-400 underline'
+                                              : idx === 0 ||
+                                                idx ===
+                                                  schedule.stopTimes.length - 1
+                                              ? 'font-semibold text-slate-900 dark:text-white'
+                                              : ''
+                                          }
+                                        >
+                                          {stop}{' '}
+                                          <span className="font-mono text-[11px] opacity-80 tabular-nums">
+                                            ({time})
+                                          </span>
+                                        </span>
+                                        {idx <
+                                          schedule.stopTimes.length - 1 && (
+                                          <ArrowRight className="w-3 h-3 text-slate-400" />
+                                        )}
                                       </span>
-                                      {idx < orderedStops.length - 1 && (
-                                        <ArrowRight className="w-3 h-3 text-slate-400" />
-                                      )}
-                                    </span>
-                                  );
-                                })}
+                                    );
+                                  }
+                                )}
                               </div>
                             )}
                           </td>
                           <td className="py-3.5 px-4 text-slate-600 dark:text-slate-400 align-top">
                             {item.stops.length > 0
                               ? item.stops.join(' · ')
-                              : 'Direct express'}
-                          </td>
-                          <td className="py-3.5 px-4 text-slate-600 dark:text-slate-400 whitespace-nowrap align-top">
-                            {item.frequency}
+                              : '—'}
                           </td>
                         </tr>
                       );
                     })}
                   </tbody>
                 </table>
+                {!hasTimingSearch && filteredTimings.length > 3 && (
+                  <div className="px-4 py-2.5 border-t border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 text-xs text-slate-500 dark:text-slate-400">
+                    {t.showingTopBusesHint} ({filteredTimings.length})
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1163,11 +1349,14 @@ export function UserPortal({
                 <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between text-xs font-semibold text-slate-600 dark:text-slate-400">
                   <span>{t.liveBuses}</span>
                   <span className="font-mono tabular-nums">
-                    {enrichedLiveBuses.length} {t.active}
+                    {!hasLiveSearch && enrichedLiveBuses.length > 3
+                      ? `${visibleLiveBuses.length} / ${enrichedLiveBuses.length}`
+                      : enrichedLiveBuses.length}{' '}
+                    {t.active}
                   </span>
                 </div>
 
-                {enrichedLiveBuses.length === 0 ? (
+                {visibleLiveBuses.length === 0 ? (
                   <div className="p-6 text-center flex-1 flex flex-col items-center justify-center">
                     <p className="text-sm font-semibold text-slate-900 dark:text-white mb-1">
                       {routeQuery
@@ -1179,8 +1368,9 @@ export function UserPortal({
                     </p>
                   </div>
                 ) : (
-                  <div className="divide-y divide-slate-200 dark:divide-slate-800 overflow-y-auto max-h-[520px]">
-                    {enrichedLiveBuses.map((bus) => {
+                  <>
+                    <div className="divide-y divide-slate-200 dark:divide-slate-800 overflow-y-auto max-h-[520px]">
+                      {visibleLiveBuses.map((bus) => {
                       const isTracked = bus.driverId === trackedBusId;
                       const cardinal = bearingToCardinal(bus.heading);
                       const hasIncident =
@@ -1214,6 +1404,13 @@ export function UserPortal({
                               {bus.routeStops.length > 0 && (
                                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
                                   Via: {bus.routeStops.join(' · ')}
+                                </p>
+                              )}
+
+                              {(bus.departureTime || bus.reachingTime) && (
+                                <p className="text-xs font-mono text-slate-600 dark:text-slate-300 mt-1 tabular-nums">
+                                  {t.departureTime}: {bus.departureTime || '--:--'}{' '}
+                                  · {t.reachingTime}: {bus.reachingTime || '--:--'}
                                 </p>
                               )}
 
@@ -1317,7 +1514,13 @@ export function UserPortal({
                         </div>
                       );
                     })}
-                  </div>
+                    </div>
+                    {!hasLiveSearch && enrichedLiveBuses.length > 3 && (
+                      <div className="px-4 py-2.5 border-t border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 text-xs text-slate-500 dark:text-slate-400">
+                        {t.showingTopBusesHint} ({enrichedLiveBuses.length})
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
 

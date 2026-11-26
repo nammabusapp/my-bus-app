@@ -5,18 +5,28 @@ interface BeforeInstallPromptEvent extends Event {
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>;
 }
 
+interface WindowWithDeferredPrompt extends Window {
+  __mybusDeferredInstallPrompt?: BeforeInstallPromptEvent | null;
+}
+
 // Keep reference to any early beforeinstallprompt event across route/view switches
-let cachedDeferredPrompt: BeforeInstallPromptEvent | null = null;
+let cachedDeferredPrompt: BeforeInstallPromptEvent | null =
+  typeof window !== 'undefined'
+    ? ((window as WindowWithDeferredPrompt).__mybusDeferredInstallPrompt ?? null)
+    : null;
 const promptListeners = new Set<() => void>();
 
 if (typeof window !== 'undefined') {
   window.addEventListener('beforeinstallprompt', (e: Event) => {
     e.preventDefault();
     cachedDeferredPrompt = e as BeforeInstallPromptEvent;
+    (window as WindowWithDeferredPrompt).__mybusDeferredInstallPrompt =
+      cachedDeferredPrompt;
     promptListeners.forEach((notify) => notify());
   });
   window.addEventListener('appinstalled', () => {
     cachedDeferredPrompt = null;
+    (window as WindowWithDeferredPrompt).__mybusDeferredInstallPrompt = null;
     promptListeners.forEach((notify) => notify());
   });
 }
@@ -35,6 +45,16 @@ export function usePWAInstall() {
         true;
 
     setIsInstalled(checkStandalone());
+
+    // Pick up any prompt captured before hook mounted
+    const globalPrompt =
+      (window as WindowWithDeferredPrompt).__mybusDeferredInstallPrompt ?? null;
+    if (globalPrompt && !cachedDeferredPrompt) {
+      cachedDeferredPrompt = globalPrompt;
+    }
+    if (cachedDeferredPrompt) {
+      setDeferredPrompt(cachedDeferredPrompt);
+    }
 
     const userAgent = window.navigator.userAgent.toLowerCase();
     const isIOSDevice =
@@ -63,6 +83,7 @@ export function usePWAInstall() {
 
     const handleAppInstalled = () => {
       cachedDeferredPrompt = null;
+      (window as WindowWithDeferredPrompt).__mybusDeferredInstallPrompt = null;
       setIsInstalled(true);
       setDeferredPrompt(null);
     };
@@ -75,19 +96,27 @@ export function usePWAInstall() {
   }, []);
 
   const install = async (): Promise<'installed' | 'dismissed' | 'unavailable'> => {
-    const promptEvent = deferredPrompt ?? cachedDeferredPrompt;
+    const promptEvent =
+      deferredPrompt ??
+      cachedDeferredPrompt ??
+      (window as WindowWithDeferredPrompt).__mybusDeferredInstallPrompt ??
+      null;
     if (!promptEvent) return 'unavailable';
     try {
       await promptEvent.prompt();
       const { outcome } = await promptEvent.userChoice;
+      cachedDeferredPrompt = null;
+      (window as WindowWithDeferredPrompt).__mybusDeferredInstallPrompt = null;
+      setDeferredPrompt(null);
       if (outcome === 'accepted') {
-        cachedDeferredPrompt = null;
         setIsInstalled(true);
-        setDeferredPrompt(null);
         return 'installed';
       }
       return 'dismissed';
     } catch {
+      cachedDeferredPrompt = null;
+      (window as WindowWithDeferredPrompt).__mybusDeferredInstallPrompt = null;
+      setDeferredPrompt(null);
       return 'unavailable';
     }
   };

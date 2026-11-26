@@ -21,6 +21,7 @@ interface UseMyBusRealtimeOptions {
   driverToken?: string | null;
   onForceStopped?: (reason: string) => void;
   onDriversUpdated?: () => void;
+  onToursUpdated?: () => void;
   onBusApproaching?: (payload: BusApproachingEventPayload) => void;
 }
 
@@ -43,6 +44,7 @@ export function useMyBusRealtime({
   driverToken,
   onForceStopped,
   onDriversUpdated,
+  onToursUpdated,
   onBusApproaching,
 }: UseMyBusRealtimeOptions) {
   const [timings, setTimings] = useState<BusTiming[]>([]);
@@ -65,6 +67,8 @@ export function useMyBusRealtime({
   onForceStoppedRef.current = onForceStopped;
   const onDriversUpdatedRef = useRef(onDriversUpdated);
   onDriversUpdatedRef.current = onDriversUpdated;
+  const onToursUpdatedRef = useRef(onToursUpdated);
+  onToursUpdatedRef.current = onToursUpdated;
   const onBusApproachingRef = useRef(onBusApproaching);
   onBusApproachingRef.current = onBusApproaching;
 
@@ -147,6 +151,8 @@ export function useMyBusRealtime({
             setStats(msg.stats);
           } else if (msg.type === 'drivers:updated') {
             onDriversUpdatedRef.current?.();
+          } else if (msg.type === 'tours:updated') {
+            onToursUpdatedRef.current?.();
           } else if (msg.type === 'bus:approaching' && msg.alert) {
             onBusApproachingRef.current?.({
               alert: msg.alert as BusApproachingAlert,
@@ -227,6 +233,10 @@ export function useMyBusRealtime({
             routeStops: Array.isArray(row.route_stops)
               ? row.route_stops.map(String)
               : [],
+            departureTime:
+              typeof row.departure_time === 'string' ? row.departure_time : undefined,
+            reachingTime:
+              typeof row.reaching_time === 'string' ? row.reaching_time : undefined,
             lat: Number(row.lat),
             lng: Number(row.lng),
             heading: typeof row.heading === 'number' ? row.heading : null,
@@ -273,10 +283,13 @@ export function useMyBusRealtime({
       startPoint: string;
       endPoint: string;
       routeStops: string[];
+      departureTime?: string;
+      reachingTime?: string;
       lat: number;
       lng: number;
       heading: number | null;
       speedMs: number | null;
+      accuracy?: number | null;
       busStatus?: BusIncidentStatus;
       statusNote?: string;
       routeCoordinates?: [number, number][];
@@ -298,8 +311,12 @@ export function useMyBusRealtime({
 
       if (isSupabaseClientConfigured && supabase) {
         const speedKmh =
-          typeof payload.speedMs === 'number' && payload.speedMs >= 0
-            ? Math.round(payload.speedMs * 3.6)
+          typeof payload.speedMs === 'number' &&
+          Number.isFinite(payload.speedMs) &&
+          payload.speedMs >= 0
+            ? payload.speedMs * 3.6 < 1.5
+              ? 0
+              : Math.min(110, Math.round(payload.speedMs * 3.6))
             : 0;
         void supabase.from('live_buses').upsert({
           driver_id: payload.driverId,
@@ -328,6 +345,8 @@ export function useMyBusRealtime({
       driverId: string;
       busStatus: BusIncidentStatus;
       statusNote?: string;
+      departureTime?: string;
+      reachingTime?: string;
     }) => {
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
         wsRef.current.send(JSON.stringify({ type: 'driver:status', payload }));

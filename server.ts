@@ -23,7 +23,7 @@ interface BusTiming {
   stops: string[];
   departureTime: string;
   arrivalTime: string;
-  frequency: string;
+  frequency?: string;
   status: 'On Time' | 'Delayed' | 'Scheduled';
 }
 
@@ -42,6 +42,8 @@ interface LiveBus {
   startPoint: string;
   endPoint: string;
   routeStops: string[];
+  departureTime?: string;
+  reachingTime?: string;
   lat: number;
   lng: number;
   heading: number | null;
@@ -50,6 +52,22 @@ interface LiveBus {
   busStatus: BusIncidentStatus;
   statusNote?: string;
   routeCoordinates?: [number, number][];
+  updatedAt: number;
+}
+
+interface DriverPunctualityRecord {
+  id: string;
+  driverId: string;
+  driverName: string;
+  busNo: string;
+  date: string;
+  scheduledDeparture: string;
+  actualDeparture: string;
+  scheduledReaching: string;
+  actualReaching?: string;
+  delayMinutes: number;
+  onTime: boolean;
+  busStatus: BusIncidentStatus;
   updatedAt: number;
 }
 
@@ -67,9 +85,24 @@ interface DriverAccount {
   reviewedAt?: number | null;
 }
 
+interface CompletedTour {
+  id: string;
+  driverId: string;
+  busNo: string;
+  startPoint: string;
+  endPoint: string;
+  routeStops: string[];
+  departureTime?: string;
+  reachingTime?: string;
+  completedCount: number;
+  lastCompletedAt: number;
+}
+
 interface StoreData {
   timings: BusTiming[];
   drivers: DriverAccount[];
+  punctualityLogs: DriverPunctualityRecord[];
+  completedTours: CompletedTour[];
 }
 
 const PORT = Number(process.env.PORT || 3000);
@@ -175,117 +208,6 @@ const supabaseKey =
 const supabase = createSafeSupabaseClient(supabaseUrl, supabaseKey);
 const isSupabaseConfigured = supabase !== null;
 
-const SEED_TIMINGS: BusTiming[] = [
-  {
-    id: 'bt-101',
-    busNo: '101-A',
-    route: 'Central Station — Airport Terminal 2',
-    startPoint: 'Central Station',
-    endPoint: 'Airport Terminal 2',
-    stops: ['City Market', 'Civic Hospital', 'Tech Park Phase 1', 'North Expressway'],
-    departureTime: '06:30',
-    arrivalTime: '07:25',
-    frequency: 'Every 20 min',
-    status: 'On Time',
-  },
-  {
-    id: 'bt-204',
-    busNo: '204-X',
-    route: 'University Campus — Harbor Pier',
-    startPoint: 'University Campus',
-    endPoint: 'Harbor Pier',
-    stops: ['Library Square', 'Metro Hub', 'Lakeview Junction', 'Old Town'],
-    departureTime: '07:00',
-    arrivalTime: '07:50',
-    frequency: 'Every 15 min',
-    status: 'On Time',
-  },
-  {
-    id: 'bt-309',
-    busNo: '309-E',
-    route: 'North Bus Terminus — Eastgate Mall',
-    startPoint: 'North Bus Terminus',
-    endPoint: 'Eastgate Mall',
-    stops: ['Botanical Park', 'Central Station', 'Sports Arena', 'Ring Road East'],
-    departureTime: '07:30',
-    arrivalTime: '08:15',
-    frequency: 'Every 30 min',
-    status: 'On Time',
-  },
-  {
-    id: 'bt-412',
-    busNo: '412-M',
-    route: 'South Tech Corridor — City Market',
-    startPoint: 'South Tech Corridor',
-    endPoint: 'City Market',
-    stops: ['Innovation Hub', 'Civic Hospital', 'Museum District'],
-    departureTime: '08:10',
-    arrivalTime: '08:55',
-    frequency: 'Every 25 min',
-    status: 'Delayed',
-  },
-  {
-    id: 'bt-518',
-    busNo: '518-C',
-    route: 'Westgate Depot — University Campus',
-    startPoint: 'Westgate Depot',
-    endPoint: 'University Campus',
-    stops: ['Industrial Park', 'Metro Hub', 'Science Plaza'],
-    departureTime: '09:00',
-    arrivalTime: '09:45',
-    frequency: 'Every 20 min',
-    status: 'Scheduled',
-  },
-  {
-    id: 'bt-622',
-    busNo: '622-N',
-    route: 'Airport Terminal 2 — Harbor Pier',
-    startPoint: 'Airport Terminal 2',
-    endPoint: 'Harbor Pier',
-    stops: ['North Expressway', 'Central Station', 'Old Town'],
-    departureTime: '10:15',
-    arrivalTime: '11:20',
-    frequency: 'Every 40 min',
-    status: 'On Time',
-  },
-];
-
-const SEED_DRIVERS: DriverAccount[] = [
-  {
-    driverId: 'DRV-101',
-    name: 'Rajendra Rao',
-    busNo: '101-A',
-    pin: '1234',
-    licenseNumber: 'KA01-2019-00101',
-    licenseImage: '',
-    status: 'approved',
-    createdAt: 1700000000000,
-    reviewedAt: 1700000000000,
-  },
-  {
-    driverId: 'DRV-102',
-    name: 'Priya Sharma',
-    busNo: '204-X',
-    pin: '1234',
-    licenseNumber: 'KA01-2020-00204',
-    licenseImage: '',
-    status: 'approved',
-    createdAt: 1700000000000,
-    reviewedAt: 1700000000000,
-  },
-  {
-    driverId: 'DRV-103',
-    name: 'Arjun Menon',
-    busNo: '309-E',
-    pin: '1234',
-    licenseNumber: 'KA05-2021-00309',
-    licenseImage: '',
-    status: 'approved',
-    createdAt: 1700000000000,
-    reviewedAt: 1700000000000,
-  },
-];
-
 function normalizeDriverStatus(raw: unknown): DriverRegistrationStatus {
   const normalized = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
   if (
@@ -356,6 +278,38 @@ function sanitizeLicenseImage(raw: unknown): string | null {
   return trimmed;
 }
 
+function sanitizeTimeHHMM(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const trimmed = raw.trim();
+  const match = /^(\d{2}):(\d{2})$/.exec(trimmed);
+  if (!match) return undefined;
+  const hours = Number(match[1]);
+  const mins = Number(match[2]);
+  if (hours < 0 || hours > 23 || mins < 0 || mins > 59) return undefined;
+  return `${match[1]}:${match[2]}`;
+}
+
+function parseTimeToMinutes(hhmm: string): number | null {
+  const clean = sanitizeTimeHHMM(hhmm);
+  if (!clean) return null;
+  const [h, m] = clean.split(':').map(Number);
+  return h * 60 + m;
+}
+
+function formatMinutesToHHMM(totalMinutes: number): string {
+  const normalized = ((totalMinutes % 1440) + 1440) % 1440;
+  const h = Math.floor(normalized / 60);
+  const m = normalized % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+function formatDateKey(date: Date): string {
+  const y = date.getUTCFullYear();
+  const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(date.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 function loadStore(): StoreData {
   try {
     if (!fs.existsSync(DATA_DIR)) {
@@ -363,22 +317,34 @@ function loadStore(): StoreData {
     }
     if (!fs.existsSync(STORE_PATH)) {
       const initial: StoreData = {
-        timings: SEED_TIMINGS,
-        drivers: SEED_DRIVERS,
+        timings: [],
+        drivers: [],
+        punctualityLogs: [],
+        completedTours: [],
       };
       fs.writeFileSync(STORE_PATH, JSON.stringify(initial, null, 2), 'utf8');
       return initial;
     }
     const raw = fs.readFileSync(STORE_PATH, 'utf8');
     const parsed = JSON.parse(raw) as Partial<StoreData>;
-    return {
-      timings: Array.isArray(parsed.timings) ? parsed.timings : SEED_TIMINGS,
-      drivers: Array.isArray(parsed.drivers)
-        ? parsed.drivers.map((d) => normalizeDriverAccount(d))
-        : SEED_DRIVERS,
-    };
+    const timings = Array.isArray(parsed.timings) ? parsed.timings : [];
+    const drivers = Array.isArray(parsed.drivers)
+      ? parsed.drivers.map((d) => normalizeDriverAccount(d))
+      : [];
+    const punctualityLogs = Array.isArray(parsed.punctualityLogs)
+      ? parsed.punctualityLogs
+      : [];
+    const completedTours = Array.isArray(parsed.completedTours)
+      ? parsed.completedTours
+      : [];
+    return { timings, drivers, punctualityLogs, completedTours };
   } catch {
-    return { timings: SEED_TIMINGS, drivers: SEED_DRIVERS };
+    return {
+      timings: [],
+      drivers: [],
+      punctualityLogs: [],
+      completedTours: [],
+    };
   }
 }
 
@@ -502,6 +468,24 @@ async function deleteTimingInSupabase(id: string) {
   const { error } = await supabase.from('bus_timings').delete().eq('id', id);
   if (error) {
     console.warn('Supabase bus_timings delete error:', error.message);
+  }
+}
+
+async function deleteDriverInSupabase(driverId: string) {
+  if (!supabase) return;
+  const { error: driverErr } = await supabase
+    .from('drivers')
+    .delete()
+    .eq('driver_id', driverId);
+  if (driverErr) {
+    console.warn('Supabase drivers delete error:', driverErr.message);
+  }
+  const { error: liveErr } = await supabase
+    .from('live_buses')
+    .delete()
+    .eq('driver_id', driverId);
+  if (liveErr) {
+    console.warn('Supabase live_buses delete error:', liveErr.message);
   }
 }
 
@@ -654,6 +638,10 @@ async function bootstrap() {
         supabaseStatusMessage = liveError.message;
       } else if (activeBuses) {
         for (const b of activeBuses) {
+          const updatedAtMs = b.updated_at
+            ? new Date(b.updated_at).getTime()
+            : Date.now();
+          const isFresh = Date.now() - updatedAtMs < 12000;
           liveBuses.set(b.driver_id, {
             driverId: b.driver_id,
             driverName: b.driver_name,
@@ -664,14 +652,14 @@ async function bootstrap() {
             lat: b.lat,
             lng: b.lng,
             heading: b.heading,
-            speedKmh: b.speed_kmh || 0,
+            speedKmh: isFresh ? Number(b.speed_kmh || 0) : 0,
             directionText: b.direction_text || 'Active GPS signal',
             busStatus: (b.bus_status as BusIncidentStatus) || 'Normal',
             statusNote: b.status_note || '',
             routeCoordinates: Array.isArray(b.route_coordinates)
               ? b.route_coordinates
               : [],
-            updatedAt: new Date(b.updated_at).getTime(),
+            updatedAt: updatedAtMs,
           });
         }
       }
@@ -823,6 +811,91 @@ async function bootstrap() {
       : 'Normal';
   }
 
+  function recordLivePunctualityLog(bus: LiveBus) {
+    const today = formatDateKey(new Date());
+    const matchedTiming = store.timings.find(
+      (t) => t.busNo.trim().toUpperCase() === bus.busNo.trim().toUpperCase()
+    );
+    const scheduledDeparture =
+      sanitizeTimeHHMM(bus.departureTime) ||
+      sanitizeTimeHHMM(matchedTiming?.departureTime) ||
+      '';
+    const scheduledReaching =
+      sanitizeTimeHHMM(bus.reachingTime) ||
+      sanitizeTimeHHMM(matchedTiming?.arrivalTime) ||
+      '';
+
+    if (!scheduledDeparture) {
+      return;
+    }
+
+    const nowDate = new Date();
+    const actualHHMM = `${String(nowDate.getHours()).padStart(2, '0')}:${String(
+      nowDate.getMinutes()
+    ).padStart(2, '0')}`;
+
+    const schedMins = parseTimeToMinutes(scheduledDeparture);
+    const actualMins = parseTimeToMinutes(actualHHMM);
+    let delayMinutes = 0;
+    if (schedMins !== null && actualMins !== null) {
+      const diff = actualMins - schedMins;
+      if (diff > 0 && diff <= 120) {
+        delayMinutes = diff;
+      }
+    }
+    if (bus.busStatus === 'Delayed' && delayMinutes < 8) {
+      delayMinutes = 8;
+    } else if (
+      bus.busStatus !== 'Normal' &&
+      bus.busStatus !== 'Delayed' &&
+      delayMinutes < 15
+    ) {
+      delayMinutes = 15;
+    }
+
+    const onTime = bus.busStatus === 'Normal' && delayMinutes <= 5;
+    const recordId = `pl-${bus.driverId}-${today}-live`;
+    const existingIdx = store.punctualityLogs.findIndex(
+      (r) => r.id === recordId
+    );
+    const schedArrMins = scheduledReaching
+      ? parseTimeToMinutes(scheduledReaching)
+      : null;
+    const actualReaching =
+      schedArrMins !== null
+        ? formatMinutesToHHMM(schedArrMins + delayMinutes)
+        : scheduledReaching;
+
+    const record: DriverPunctualityRecord = {
+      id: recordId,
+      driverId: bus.driverId,
+      driverName: bus.driverName,
+      busNo: bus.busNo,
+      date: today,
+      scheduledDeparture,
+      actualDeparture:
+        existingIdx >= 0
+          ? store.punctualityLogs[existingIdx].actualDeparture
+          : actualHHMM,
+      scheduledReaching,
+      actualReaching,
+      delayMinutes,
+      onTime,
+      busStatus: bus.busStatus,
+      updatedAt: Date.now(),
+    };
+
+    if (existingIdx >= 0) {
+      store.punctualityLogs[existingIdx] = record;
+    } else {
+      store.punctualityLogs.push(record);
+    }
+    if (store.punctualityLogs.length > 2500) {
+      store.punctualityLogs = store.punctualityLogs.slice(-2500);
+    }
+    saveStore(store);
+  }
+
   function upsertLiveBusLocation(input: {
     driverId: string;
     driverName: string;
@@ -830,10 +903,13 @@ async function bootstrap() {
     startPoint: string;
     endPoint: string;
     routeStops: string[];
+    departureTime?: string;
+    reachingTime?: string;
     lat: number;
     lng: number;
     heading: number | null;
     speedMs?: number | null;
+    accuracy?: number | null;
     busStatus?: BusIncidentStatus;
     statusNote?: string;
     routeCoordinates?: [number, number][];
@@ -845,20 +921,40 @@ async function bootstrap() {
       typeof input.heading === 'number' && !Number.isNaN(input.heading)
         ? input.heading
         : null;
-    let resolvedSpeedKmh =
-      typeof input.speedMs === 'number' && !Number.isNaN(input.speedMs) && input.speedMs >= 0
-        ? Math.round(input.speedMs * 3.6)
-        : 0;
+
+    const hasExplicitSpeed =
+      typeof input.speedMs === 'number' &&
+      Number.isFinite(input.speedMs) &&
+      input.speedMs >= 0;
+
+    let resolvedSpeedKmh = 0;
+    if (hasExplicitSpeed) {
+      const kmh = input.speedMs! * 3.6;
+      resolvedSpeedKmh = kmh < 1.5 ? 0 : Math.min(110, Math.round(kmh));
+    }
+
+    const accuracyMeters =
+      typeof input.accuracy === 'number' &&
+      Number.isFinite(input.accuracy) &&
+      input.accuracy > 0
+        ? input.accuracy
+        : null;
 
     if (prev) {
       const movedMeters = haversineMeters(prev.lat, prev.lng, input.lat, input.lng);
-      const dtSec = Math.max(1, (now - prev.updatedAt) / 1000);
-      if (movedMeters > 4) {
+      const dtSec = (now - prev.updatedAt) / 1000;
+      const minMoveThreshold = Math.max(12, (accuracyMeters ?? 15) * 0.5);
+      const accuracyAcceptable = accuracyMeters === null || accuracyMeters <= 45;
+
+      if (movedMeters > minMoveThreshold && accuracyAcceptable) {
         if (resolvedHeading === null) {
           resolvedHeading = computeBearing(prev.lat, prev.lng, input.lat, input.lng);
         }
-        if (resolvedSpeedKmh === 0) {
-          resolvedSpeedKmh = Math.min(95, Math.round((movedMeters / dtSec) * 3.6));
+        if (!hasExplicitSpeed && dtSec >= 2) {
+          const estimatedKmh = Math.round((movedMeters / dtSec) * 3.6);
+          if (estimatedKmh >= 2 && estimatedKmh <= 105) {
+            resolvedSpeedKmh = estimatedKmh;
+          }
         }
       } else if (resolvedHeading === null) {
         resolvedHeading = prev.heading;
@@ -866,10 +962,17 @@ async function bootstrap() {
     }
 
     const cardinal = bearingToCardinal(resolvedHeading);
+    const destSuffix = input.endPoint ? ` toward ${input.endPoint}` : '';
     const directionText =
-      resolvedHeading !== null
-        ? `Moving ${cardinal} (${Math.round(resolvedHeading)}°) toward ${input.endPoint}`
-        : `En route toward ${input.endPoint}`;
+      resolvedSpeedKmh === 0
+        ? input.endPoint
+          ? `Stationary · Toward ${input.endPoint}`
+          : 'Stationary'
+        : resolvedHeading !== null
+        ? `Moving ${cardinal} (${Math.round(resolvedHeading)}°)${destSuffix}`
+        : input.endPoint
+        ? `En route toward ${input.endPoint}`
+        : 'Active GPS signal';
 
     const resolvedStatus = input.busStatus
       ? normalizeIncidentStatus(input.busStatus)
@@ -880,6 +983,10 @@ async function bootstrap() {
       Array.isArray(input.routeCoordinates) && input.routeCoordinates.length > 0
         ? input.routeCoordinates
         : prev?.routeCoordinates || [];
+    const resolvedDepTime =
+      sanitizeTimeHHMM(input.departureTime) ?? prev?.departureTime;
+    const resolvedReachTime =
+      sanitizeTimeHHMM(input.reachingTime) ?? prev?.reachingTime;
 
     const updated: LiveBus = {
       driverId: input.driverId,
@@ -888,6 +995,8 @@ async function bootstrap() {
       startPoint: input.startPoint,
       endPoint: input.endPoint,
       routeStops: input.routeStops,
+      departureTime: resolvedDepTime,
+      reachingTime: resolvedReachTime,
       lat: input.lat,
       lng: input.lng,
       heading: resolvedHeading,
@@ -900,11 +1009,125 @@ async function bootstrap() {
     };
 
     liveBuses.set(input.driverId, updated);
+    ensureBusTimingForDriverTour({
+      busNo: updated.busNo,
+      startPoint: updated.startPoint,
+      endPoint: updated.endPoint,
+      routeStops: updated.routeStops,
+      departureTime: updated.departureTime,
+      arrivalTime: updated.reachingTime,
+      busStatus: updated.busStatus,
+    });
+    if (
+      !prev ||
+      prev.busStatus !== updated.busStatus ||
+      prev.departureTime !== updated.departureTime ||
+      prev.reachingTime !== updated.reachingTime
+    ) {
+      recordLivePunctualityLog(updated);
+    }
     void syncLiveBusToSupabase(updated);
     broadcast({ type: 'bus:update', bus: updated });
     broadcastStats();
     void evaluateStopAlertsForBus(updated);
     return updated;
+  }
+
+  function normalizePlaceKey(value: string): string {
+    return value.trim().replace(/\s+/g, ' ').toLowerCase();
+  }
+
+  function normalizeBusKey(value: string): string {
+    return value.trim().replace(/\s+/g, ' ').toUpperCase();
+  }
+
+  function ensureBusTimingForDriverTour(params: {
+    busNo: string;
+    startPoint: string;
+    endPoint: string;
+    routeStops: string[];
+    departureTime?: string;
+    arrivalTime?: string;
+    busStatus?: BusIncidentStatus;
+  }): { created: boolean; timing?: BusTiming } {
+    const busNo = params.busNo.trim();
+    const startPoint = params.startPoint.trim();
+    const endPoint = params.endPoint.trim();
+    if (!busNo || !startPoint || !endPoint) {
+      return { created: false };
+    }
+
+    const busKey = normalizeBusKey(busNo);
+    const startKey = normalizePlaceKey(startPoint);
+    const endKey = normalizePlaceKey(endPoint);
+    const cleanStops = (params.routeStops || [])
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const depTime = sanitizeTimeHHMM(params.departureTime) || '--:--';
+    const arrTime = sanitizeTimeHHMM(params.arrivalTime) || '--:--';
+    const mappedStatus: BusTiming['status'] =
+      params.busStatus === 'Delayed' || params.busStatus === 'Breakdown'
+        ? 'Delayed'
+        : 'On Time';
+
+    const existingIdx = store.timings.findIndex(
+      (t) =>
+        normalizeBusKey(t.busNo) === busKey &&
+        normalizePlaceKey(t.startPoint) === startKey &&
+        normalizePlaceKey(t.endPoint) === endKey
+    );
+
+    if (existingIdx >= 0) {
+      const existing = store.timings[existingIdx];
+      // Never duplicate or overwrite Admin-provided timings.
+      // Only refine auto-created driver timings in place when stops/times are updated.
+      if (existing.id.startsWith('bt-drv-')) {
+        const nextStops = cleanStops.length > 0 ? cleanStops : existing.stops;
+        const nextDep = depTime !== '--:--' ? depTime : existing.departureTime;
+        const nextArr = arrTime !== '--:--' ? arrTime : existing.arrivalTime;
+        const stopsChanged = nextStops.join('|') !== existing.stops.join('|');
+        const changed =
+          stopsChanged ||
+          nextDep !== existing.departureTime ||
+          nextArr !== existing.arrivalTime ||
+          mappedStatus !== existing.status;
+
+        if (changed) {
+          const updatedTiming: BusTiming = {
+            ...existing,
+            stops: nextStops,
+            departureTime: nextDep,
+            arrivalTime: nextArr,
+            status: mappedStatus,
+          };
+          store.timings[existingIdx] = updatedTiming;
+          saveStore(store);
+          void syncTimingToSupabase(updatedTiming);
+          broadcast({ type: 'timings:updated', timings: store.timings });
+          return { created: false, timing: updatedTiming };
+        }
+      }
+      return { created: false, timing: existing };
+    }
+
+    const createdTiming: BusTiming = {
+      id: `bt-drv-${crypto.randomBytes(4).toString('hex')}`,
+      busNo,
+      route: `${startPoint} — ${endPoint}`,
+      startPoint,
+      endPoint,
+      stops: cleanStops,
+      departureTime: depTime,
+      arrivalTime: arrTime,
+      frequency: '',
+      status: mappedStatus,
+    };
+    store.timings.push(createdTiming);
+    saveStore(store);
+    void syncTimingToSupabase(createdTiming);
+    broadcast({ type: 'timings:updated', timings: store.timings });
+    broadcastStats();
+    return { created: true, timing: createdTiming };
   }
 
   async function evaluateStopAlertsForBus(bus: LiveBus) {
@@ -998,7 +1221,93 @@ async function bootstrap() {
     }
   }
 
-  function removeLiveBus(driverId: string, forcedByAdmin = false) {
+  function recordCompletedTourFromLiveBus(bus: LiveBus) {
+    const startPoint = bus.startPoint.trim();
+    const endPoint = bus.endPoint.trim();
+    if (!startPoint || !endPoint) return;
+
+    const cleanStops = (bus.routeStops || [])
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const busNo = bus.busNo.trim().toUpperCase();
+    const driverId = bus.driverId.trim().toUpperCase();
+    const depTime = sanitizeTimeHHMM(bus.departureTime);
+    const reachTime = sanitizeTimeHHMM(bus.reachingTime);
+
+    const buildSig = (
+      bNo: string,
+      sPt: string,
+      ePt: string,
+      stops: string[]
+    ) =>
+      [
+        bNo.trim().toUpperCase(),
+        sPt.trim().toLowerCase(),
+        ePt.trim().toLowerCase(),
+        ...stops.map((s) => s.trim().toLowerCase()),
+      ].join('|');
+
+    const incomingSig = buildSig(busNo, startPoint, endPoint, cleanStops);
+    const now = Date.now();
+    const existingIdx = store.completedTours.findIndex(
+      (t) =>
+        t.driverId.toUpperCase() === driverId &&
+        buildSig(t.busNo, t.startPoint, t.endPoint, t.routeStops) ===
+          incomingSig
+    );
+
+    if (existingIdx >= 0) {
+      const prev = store.completedTours[existingIdx];
+      store.completedTours[existingIdx] = {
+        ...prev,
+        startPoint,
+        endPoint,
+        routeStops: cleanStops,
+        departureTime: depTime ?? prev.departureTime,
+        reachingTime: reachTime ?? prev.reachingTime,
+        completedCount: (prev.completedCount || 1) + 1,
+        lastCompletedAt: now,
+      };
+    } else {
+      store.completedTours.push({
+        id: `tour-${crypto.randomBytes(4).toString('hex')}`,
+        driverId,
+        busNo,
+        startPoint,
+        endPoint,
+        routeStops: cleanStops,
+        departureTime: depTime,
+        reachingTime: reachTime,
+        completedCount: 1,
+        lastCompletedAt: now,
+      });
+    }
+
+    if (store.completedTours.length > 500) {
+      store.completedTours = store.completedTours
+        .sort((a, b) => b.lastCompletedAt - a.lastCompletedAt)
+        .slice(0, 500);
+    }
+    saveStore(store);
+
+    for (const c of clients) {
+      if (
+        c.ws.readyState === WebSocket.OPEN &&
+        c.role === 'driver' &&
+        (c.driverId?.toUpperCase() === driverId ||
+          c.authenticatedDriverId?.toUpperCase() === driverId)
+      ) {
+        c.ws.send(JSON.stringify({ type: 'tours:updated', driverId }));
+      }
+    }
+  }
+
+  function removeLiveBus(
+    driverId: string,
+    forcedByAdmin = false,
+    recordTour = true
+  ) {
+    const activeBus = liveBuses.get(driverId);
     const existed = liveBuses.delete(driverId);
     for (const alert of stopAlerts.values()) {
       if (alert.driverId === driverId) {
@@ -1006,6 +1315,9 @@ async function bootstrap() {
       }
     }
     if (existed) {
+      if (recordTour && activeBus) {
+        recordCompletedTourFromLiveBus(activeBus);
+      }
       void stopLiveBusInSupabase(driverId);
       broadcast({ type: 'bus:removed', driverId });
       broadcastStats();
@@ -1082,11 +1394,15 @@ async function bootstrap() {
         if (msg.type === 'driver:location' && msg.payload) {
           const p = msg.payload;
           const reqId = String(p.driverId || '').trim().toUpperCase();
+          const cleanStart = String(p.startPoint || '').trim();
+          const cleanEnd = String(p.endPoint || '').trim();
           if (
             typeof p.lat === 'number' &&
             typeof p.lng === 'number' &&
             reqId &&
             p.busNo &&
+            cleanStart &&
+            cleanEnd &&
             meta.authenticatedDriverId === reqId &&
             isApprovedDriver(reqId)
           ) {
@@ -1095,15 +1411,18 @@ async function bootstrap() {
               driverId: reqId,
               driverName: String(p.driverName || 'Driver'),
               busNo: String(p.busNo),
-              startPoint: String(p.startPoint || 'Origin'),
-              endPoint: String(p.endPoint || 'Destination'),
+              startPoint: cleanStart,
+              endPoint: cleanEnd,
               routeStops: Array.isArray(p.routeStops)
                 ? p.routeStops.map(String).filter(Boolean)
                 : [],
+              departureTime: sanitizeTimeHHMM(p.departureTime),
+              reachingTime: sanitizeTimeHHMM(p.reachingTime),
               lat: p.lat,
               lng: p.lng,
               heading: typeof p.heading === 'number' ? p.heading : null,
               speedMs: typeof p.speedMs === 'number' ? p.speedMs : null,
+              accuracy: typeof p.accuracy === 'number' ? p.accuracy : null,
               busStatus: p.busStatus ? normalizeIncidentStatus(p.busStatus) : undefined,
               statusNote: typeof p.statusNote === 'string' ? p.statusNote : undefined,
               routeCoordinates: Array.isArray(p.routeCoordinates)
@@ -1125,11 +1444,30 @@ async function bootstrap() {
           if (existing) {
             const updated: LiveBus = {
               ...existing,
-              busStatus: normalizeIncidentStatus(p.busStatus),
-              statusNote: typeof p.statusNote === 'string' ? p.statusNote : '',
+              busStatus: p.busStatus
+                ? normalizeIncidentStatus(p.busStatus)
+                : existing.busStatus,
+              statusNote:
+                typeof p.statusNote === 'string'
+                  ? p.statusNote
+                  : existing.statusNote,
+              departureTime:
+                sanitizeTimeHHMM(p.departureTime) ?? existing.departureTime,
+              reachingTime:
+                sanitizeTimeHHMM(p.reachingTime) ?? existing.reachingTime,
               updatedAt: Date.now(),
             };
             liveBuses.set(existing.driverId, updated);
+            ensureBusTimingForDriverTour({
+              busNo: updated.busNo,
+              startPoint: updated.startPoint,
+              endPoint: updated.endPoint,
+              routeStops: updated.routeStops,
+              departureTime: updated.departureTime,
+              arrivalTime: updated.reachingTime,
+              busStatus: updated.busStatus,
+            });
+            recordLivePunctualityLog(updated);
             void syncLiveBusToSupabase(updated);
             broadcast({ type: 'bus:update', bus: updated });
           }
@@ -1316,6 +1654,11 @@ async function bootstrap() {
     }
 
     const token = signToken({ role: 'driver', driverId: found.driverId });
+    const activeLiveBus = liveBuses.get(found.driverId) ?? null;
+    const completedTours = store.completedTours
+      .filter((t) => t.driverId.toUpperCase() === found.driverId.toUpperCase())
+      .sort((a, b) => b.lastCompletedAt - a.lastCompletedAt);
+
     res.json({
       token,
       driver: {
@@ -1325,6 +1668,8 @@ async function bootstrap() {
         licenseNumber: found.licenseNumber,
         status: found.status,
       },
+      activeLiveBus,
+      completedTours,
     });
   });
 
@@ -1422,10 +1767,13 @@ async function bootstrap() {
       startPoint,
       endPoint,
       routeStops,
+      departureTime,
+      reachingTime,
       lat,
       lng,
       heading,
       speedMs,
+      accuracy,
       busStatus,
       statusNote,
       routeCoordinates,
@@ -1441,17 +1789,27 @@ async function bootstrap() {
       res.status(400).json({ error: 'Valid numeric lat and lng are required.' });
       return;
     }
+    const cleanStart = String(startPoint || '').trim();
+    const cleanEnd = String(endPoint || '').trim();
+    if (!cleanStart || !cleanEnd) {
+      res.status(400).json({ error: 'Starting point and ending point are required.' });
+      return;
+    }
+
     const bus = upsertLiveBusLocation({
       driverId: authedDriverId,
       driverName: String(driverName || latestDriver.name || 'Driver'),
-      busNo: String(busNo || latestDriver.busNo || 'BUS'),
-      startPoint: String(startPoint || 'Origin'),
-      endPoint: String(endPoint || 'Destination'),
+      busNo: String(busNo || latestDriver.busNo || ''),
+      startPoint: cleanStart,
+      endPoint: cleanEnd,
       routeStops: Array.isArray(routeStops) ? routeStops.map(String) : [],
+      departureTime: sanitizeTimeHHMM(departureTime),
+      reachingTime: sanitizeTimeHHMM(reachingTime),
       lat,
       lng,
       heading: typeof heading === 'number' ? heading : null,
       speedMs: typeof speedMs === 'number' ? speedMs : null,
+      accuracy: typeof accuracy === 'number' ? accuracy : null,
       busStatus: busStatus ? normalizeIncidentStatus(busStatus) : undefined,
       statusNote: typeof statusNote === 'string' ? statusNote : undefined,
       routeCoordinates: Array.isArray(routeCoordinates)
@@ -1471,7 +1829,7 @@ async function bootstrap() {
       return;
     }
 
-    const { busStatus, statusNote } = req.body || {};
+    const { busStatus, statusNote, departureTime, reachingTime } = req.body || {};
     const existing = liveBuses.get(authedDriverId);
     if (!existing) {
       res.json({ ok: true, updated: false });
@@ -1479,14 +1837,96 @@ async function bootstrap() {
     }
     const updated: LiveBus = {
       ...existing,
-      busStatus: normalizeIncidentStatus(busStatus),
-      statusNote: typeof statusNote === 'string' ? statusNote : '',
+      busStatus: busStatus
+        ? normalizeIncidentStatus(busStatus)
+        : existing.busStatus,
+      statusNote:
+        typeof statusNote === 'string' ? statusNote : existing.statusNote,
+      departureTime:
+        sanitizeTimeHHMM(departureTime) ?? existing.departureTime,
+      reachingTime:
+        sanitizeTimeHHMM(reachingTime) ?? existing.reachingTime,
       updatedAt: Date.now(),
     };
     liveBuses.set(existing.driverId, updated);
+    ensureBusTimingForDriverTour({
+      busNo: updated.busNo,
+      startPoint: updated.startPoint,
+      endPoint: updated.endPoint,
+      routeStops: updated.routeStops,
+      departureTime: updated.departureTime,
+      arrivalTime: updated.reachingTime,
+      busStatus: updated.busStatus,
+    });
+    recordLivePunctualityLog(updated);
     void syncLiveBusToSupabase(updated);
     broadcast({ type: 'bus:update', bus: updated });
     res.json({ ok: true, bus: updated });
+  });
+
+  app.post('/api/driver/tour-sync', async (req, res) => {
+    const authedDriverId = requireApprovedDriver(req, res);
+    if (!authedDriverId) return;
+
+    const latestDriver = await refreshDriverFromDatabase(authedDriverId);
+    if (!latestDriver || latestDriver.status !== 'approved') {
+      res.status(403).json({ error: 'Only approved drivers can sync tours.' });
+      return;
+    }
+
+    const {
+      startPoint,
+      endPoint,
+      routeStops,
+      departureTime,
+      reachingTime,
+      busStatus,
+    } = req.body || {};
+
+    const cleanStart = String(startPoint || '').trim();
+    const cleanEnd = String(endPoint || '').trim();
+    if (!cleanStart || !cleanEnd) {
+      res.status(400).json({ error: 'Starting point and ending point are required.' });
+      return;
+    }
+
+    const result = ensureBusTimingForDriverTour({
+      busNo: latestDriver.busNo,
+      startPoint: cleanStart,
+      endPoint: cleanEnd,
+      routeStops: Array.isArray(routeStops) ? routeStops.map(String) : [],
+      departureTime: sanitizeTimeHHMM(departureTime),
+      arrivalTime: sanitizeTimeHHMM(reachingTime),
+      busStatus: busStatus ? normalizeIncidentStatus(busStatus) : undefined,
+    });
+
+    res.json({ ok: true, created: result.created, timing: result.timing || null });
+  });
+
+  app.get('/api/driver/tours', (req, res) => {
+    const authedDriverId = requireApprovedDriver(req, res);
+    if (!authedDriverId) return;
+    const tours = store.completedTours
+      .filter((t) => t.driverId.toUpperCase() === authedDriverId)
+      .sort((a, b) => b.lastCompletedAt - a.lastCompletedAt);
+    res.json({ tours });
+  });
+
+  app.delete('/api/driver/tours/:tourId', (req, res) => {
+    const authedDriverId = requireApprovedDriver(req, res);
+    if (!authedDriverId) return;
+    const tourId = String(req.params.tourId || '').trim();
+    const before = store.completedTours.length;
+    store.completedTours = store.completedTours.filter(
+      (t) =>
+        !(t.id === tourId && t.driverId.toUpperCase() === authedDriverId)
+    );
+    if (store.completedTours.length === before) {
+      res.status(404).json({ error: 'Tour not found.' });
+      return;
+    }
+    saveStore(store);
+    res.json({ ok: true });
   });
 
   // Admin Auth Middleware
@@ -1582,6 +2022,207 @@ async function bootstrap() {
     res.json({ ok: true, driver: toPublicDriver(updated) });
   });
 
+  app.get('/api/admin/performance', requireAdmin, (req, res) => {
+    const rawDays = Number(req.query.days);
+    const days =
+      Number.isFinite(rawDays) && rawDays >= 7 && rawDays <= 30
+        ? Math.round(rawDays)
+        : 30;
+    const filterDriverId =
+      typeof req.query.driverId === 'string' && req.query.driverId.trim()
+        ? req.query.driverId.trim().toUpperCase()
+        : undefined;
+
+    const nowMs = Date.now();
+    const msPerDay = 86_400_000;
+    const dateKeys: string[] = [];
+    for (let offset = days - 1; offset >= 0; offset--) {
+      dateKeys.push(formatDateKey(new Date(nowMs - offset * msPerDay)));
+    }
+    const dateSet = new Set(dateKeys);
+    const windowLogs = store.punctualityLogs.filter((log) =>
+      dateSet.has(log.date)
+    );
+
+    // Build per-driver summaries across all drivers in the window
+    const driverMap = new Map<
+      string,
+      {
+        driverId: string;
+        driverName: string;
+        busNo: string;
+        totalTrips: number;
+        onTimeTrips: number;
+        delayedTrips: number;
+        delaySum: number;
+        maxDelayMin: number;
+        lastTripDate: string;
+      }
+    >();
+
+    for (const log of windowLogs) {
+      const id = log.driverId.toUpperCase();
+      const existing = driverMap.get(id);
+      if (!existing) {
+        driverMap.set(id, {
+          driverId: id,
+          driverName: log.driverName,
+          busNo: log.busNo,
+          totalTrips: 1,
+          onTimeTrips: log.onTime ? 1 : 0,
+          delayedTrips: log.onTime ? 0 : 1,
+          delaySum: log.delayMinutes,
+          maxDelayMin: log.delayMinutes,
+          lastTripDate: log.date,
+        });
+      } else {
+        existing.totalTrips += 1;
+        if (log.onTime) existing.onTimeTrips += 1;
+        else existing.delayedTrips += 1;
+        existing.delaySum += log.delayMinutes;
+        if (log.delayMinutes > existing.maxDelayMin) {
+          existing.maxDelayMin = log.delayMinutes;
+        }
+        if (log.date > existing.lastTripDate) {
+          existing.lastTripDate = log.date;
+        }
+      }
+    }
+
+    const driverSummaries = Array.from(driverMap.values())
+      .map((d) => ({
+        driverId: d.driverId,
+        driverName: d.driverName,
+        busNo: d.busNo,
+        totalTrips: d.totalTrips,
+        onTimeTrips: d.onTimeTrips,
+        delayedTrips: d.delayedTrips,
+        punctualityPct:
+          d.totalTrips > 0
+            ? Math.round((d.onTimeTrips / d.totalTrips) * 1000) / 10
+            : 0,
+        avgDelayMin:
+          d.totalTrips > 0
+            ? Math.round((d.delaySum / d.totalTrips) * 10) / 10
+            : 0,
+        maxDelayMin: d.maxDelayMin,
+        lastTripDate: d.lastTripDate,
+      }))
+      .sort((a, b) => b.punctualityPct - a.punctualityPct);
+
+    const scopedLogs = filterDriverId
+      ? windowLogs.filter(
+          (log) => log.driverId.toUpperCase() === filterDriverId
+        )
+      : windowLogs;
+
+    const dailyMap = new Map<
+      string,
+      { total: number; onTime: number; delayed: number; delaySum: number }
+    >();
+    for (const dateKey of dateKeys) {
+      dailyMap.set(dateKey, { total: 0, onTime: 0, delayed: 0, delaySum: 0 });
+    }
+    for (const log of scopedLogs) {
+      const bucket = dailyMap.get(log.date);
+      if (!bucket) continue;
+      bucket.total += 1;
+      if (log.onTime) bucket.onTime += 1;
+      else bucket.delayed += 1;
+      bucket.delaySum += log.delayMinutes;
+    }
+
+    const dailySeries = dateKeys.map((date) => {
+      const b = dailyMap.get(date)!;
+      return {
+        date,
+        totalTrips: b.total,
+        onTimeTrips: b.onTime,
+        delayedTrips: b.delayed,
+        onTimePct:
+          b.total > 0 ? Math.round((b.onTime / b.total) * 1000) / 10 : 0,
+        avgDelayMin:
+          b.total > 0 ? Math.round((b.delaySum / b.total) * 10) / 10 : 0,
+      };
+    });
+
+    const totalTrips = scopedLogs.length;
+    const onTimeTrips = scopedLogs.filter((l) => l.onTime).length;
+    const delayedTrips = totalTrips - onTimeTrips;
+    const totalDelay = scopedLogs.reduce((acc, l) => acc + l.delayMinutes, 0);
+    const overallOnTimePct =
+      totalTrips > 0 ? Math.round((onTimeTrips / totalTrips) * 1000) / 10 : 0;
+    const avgDelayMin =
+      totalTrips > 0 ? Math.round((totalDelay / totalTrips) * 10) / 10 : 0;
+    const topDriver = driverSummaries[0];
+
+    res.json({
+      days,
+      generatedAt: nowMs,
+      kpis: {
+        overallOnTimePct,
+        totalTrips,
+        onTimeTrips,
+        delayedTrips,
+        avgDelayMin,
+        activeTrackedDrivers: driverSummaries.length,
+        topDriverName: topDriver ? topDriver.driverName : '—',
+        topDriverPct: topDriver ? topDriver.punctualityPct : 0,
+      },
+      dailySeries,
+      driverSummaries,
+    });
+  });
+
+  app.delete('/api/admin/drivers/:driverId', requireAdmin, (req, res) => {
+    const idNorm = String(req.params.driverId || '').trim().toUpperCase();
+    if (!idNorm || idNorm.length > 64) {
+      res.status(400).json({ error: 'Valid Driver ID is required.' });
+      return;
+    }
+
+    const idx = store.drivers.findIndex(
+      (d) => d.driverId.toUpperCase() === idNorm
+    );
+    if (idx === -1) {
+      res.status(404).json({ error: 'Driver not found.' });
+      return;
+    }
+
+    const [removedDriver] = store.drivers.splice(idx, 1);
+    store.punctualityLogs = store.punctualityLogs.filter(
+      (log) => log.driverId.toUpperCase() !== idNorm
+    );
+    store.completedTours = store.completedTours.filter(
+      (tour) => tour.driverId.toUpperCase() !== idNorm
+    );
+    saveStore(store);
+    void deleteDriverInSupabase(removedDriver.driverId);
+
+    removeLiveBus(removedDriver.driverId, true, false);
+
+    for (const [alertKey, alert] of stopAlerts.entries()) {
+      if (alert.driverId.toUpperCase() === idNorm) {
+        stopAlerts.delete(alertKey);
+      }
+    }
+
+    for (const c of clients) {
+      if (
+        c.role === 'driver' &&
+        (c.driverId?.toUpperCase() === idNorm ||
+          c.authenticatedDriverId === idNorm)
+      ) {
+        c.authenticatedDriverId = undefined;
+        c.driverId = undefined;
+      }
+    }
+
+    broadcast({ type: 'drivers:updated' });
+    broadcastStats();
+    res.json({ ok: true, deletedDriverId: removedDriver.driverId });
+  });
+
   app.post('/api/admin/stop-bus/:driverId', requireAdmin, (req, res) => {
     const driverId = String(req.params.driverId);
     const removed = removeLiveBus(driverId, true);
@@ -1617,7 +2258,7 @@ async function bootstrap() {
       stops: cleanStops,
       departureTime: String(departureTime).trim(),
       arrivalTime: String(arrivalTime).trim(),
-      frequency: String(frequency || 'Every 20 min').trim(),
+      frequency: typeof frequency === 'string' ? frequency.trim() : '',
       status:
         status === 'Delayed' || status === 'Scheduled' ? status : 'On Time',
     };
@@ -1651,7 +2292,10 @@ async function bootstrap() {
         : existing.stops,
       departureTime: String(body.departureTime ?? existing.departureTime).trim(),
       arrivalTime: String(body.arrivalTime ?? existing.arrivalTime).trim(),
-      frequency: String(body.frequency ?? existing.frequency).trim(),
+      frequency:
+        typeof body.frequency === 'string'
+          ? body.frequency.trim()
+          : existing.frequency ?? '',
       status:
         body.status === 'Delayed' ||
         body.status === 'Scheduled' ||
@@ -1684,18 +2328,91 @@ async function bootstrap() {
   // Vite Dev Middleware or Static Production Build
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
+    const hmrDisabled = process.env.DISABLE_HMR === 'true';
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
         allowedHosts: true,
-        hmr:
-          process.env.DISABLE_HMR !== 'true'
-            ? { server, path: '/vite-hmr' }
-            : false,
-        ws: { server, path: '/vite-hmr' },
+        hmr: hmrDisabled ? false : { server, path: '/vite-hmr' },
+        ws: hmrDisabled ? false : { server, path: '/vite-hmr' },
       },
       appType: 'spa',
     });
+
+    if (hmrDisabled) {
+      app.get('/@vite/client', (_req, res) => {
+        res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-store');
+        res.send(`
+const sheetsMap = new Map();
+const linkSheetsMap = new Map();
+if ("document" in globalThis) {
+  document.querySelectorAll("style[data-vite-dev-id]").forEach((el) => {
+    sheetsMap.set(el.getAttribute("data-vite-dev-id"), el);
+  });
+  document.querySelectorAll('link[rel="stylesheet"][data-vite-dev-id]').forEach((el) => {
+    linkSheetsMap.set(el.getAttribute("data-vite-dev-id"), el);
+  });
+}
+let lastInsertedStyle;
+export function updateStyle(id, content) {
+  if (linkSheetsMap.has(id)) return;
+  let style = sheetsMap.get(id);
+  if (!style) {
+    style = document.createElement("style");
+    style.setAttribute("type", "text/css");
+    style.setAttribute("data-vite-dev-id", id);
+    style.textContent = content;
+    if (!lastInsertedStyle) {
+      document.head.appendChild(style);
+      setTimeout(() => { lastInsertedStyle = undefined; }, 0);
+    } else {
+      lastInsertedStyle.insertAdjacentElement("afterend", style);
+    }
+    lastInsertedStyle = style;
+  } else if (style.textContent !== content) {
+    style.textContent = content;
+  }
+  sheetsMap.set(id, style);
+}
+export function removeStyle(id) {
+  if (linkSheetsMap.has(id)) {
+    document.querySelectorAll('link[rel="stylesheet"][data-vite-dev-id="' + CSS.escape(id) + '"]').forEach((el) => el.remove());
+    linkSheetsMap.delete(id);
+  }
+  const style = sheetsMap.get(id);
+  if (style) {
+    document.head.removeChild(style);
+    sheetsMap.delete(id);
+  }
+}
+export function injectQuery(url, queryToInject) {
+  if (url[0] !== "." && url[0] !== "/") return url;
+  const pathname = url.replace(/[?#].*$/, "");
+  const { search, hash } = new URL(url, "http://vite.dev");
+  return pathname + "?" + queryToInject + (search ? "&" + search.slice(1) : "") + (hash || "");
+}
+export function createHotContext() {
+  return {
+    data: {},
+    accept() {},
+    acceptExports() {},
+    dispose() {},
+    prune() {},
+    decline() {},
+    invalidate() {},
+    on() {},
+    off() {},
+    send() {},
+  };
+}
+export class ErrorOverlay extends HTMLElement {
+  close() { this.remove(); }
+}
+`);
+      });
+    }
+
     app.use(vite.middlewares);
   } else {
     const distDir = path.resolve(process.cwd(), 'dist');
@@ -1704,6 +2421,25 @@ async function bootstrap() {
       res.sendFile(path.join(distDir, 'index.html'));
     });
   }
+
+  // Decay stale speed to 0 km/h when a bus hasn't reported movement in >= 12s
+  setInterval(() => {
+    const now = Date.now();
+    for (const [driverId, bus] of liveBuses.entries()) {
+      if (bus.speedKmh > 0 && now - bus.updatedAt >= 12000) {
+        const updatedBus: LiveBus = {
+          ...bus,
+          speedKmh: 0,
+          directionText: bus.endPoint
+            ? `Stationary · Toward ${bus.endPoint}`
+            : 'Stationary',
+        };
+        liveBuses.set(driverId, updatedBus);
+        void syncLiveBusToSupabase(updatedBus);
+        broadcast({ type: 'bus:update', bus: updatedBus });
+      }
+    }
+  }, 8000);
 
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`My Bus server running on http://0.0.0.0:${PORT}`);

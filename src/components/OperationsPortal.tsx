@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   BadgeCheck,
+  BarChart3,
   Bus,
   CheckCircle2,
   Clock,
@@ -18,6 +19,7 @@ import {
   Navigation,
   Plus,
   Radio,
+  RotateCcw,
   ShieldCheck,
   Square,
   Trash2,
@@ -34,18 +36,18 @@ import {
   AppLang,
   BusIncidentStatus,
   BusTiming,
+  CompletedTour,
   DriverProfile,
   DriverRecord,
   LiveBus,
   OpsMode,
   ThemeMode,
 } from '../types';
-import {
-  KANNADA_STOP_SUGGESTIONS,
-  transliterateToKannada,
-} from '../utils/kannada';
+import { haversineDistanceKm } from '../utils/geo';
+import { transliterateToKannada } from '../utils/kannada';
 import { LanguageToggle } from './LanguageToggle';
 import { LiveTransitMap } from './LiveTransitMap';
+import { PerformanceOverview } from './PerformanceOverview';
 import { PWAInstallButton } from './PWAInstallButton';
 import { ThemeToggle } from './ThemeToggle';
 import heroBusImage from '../assets/images/hero_modern_bus_1795111364827.jpg';
@@ -54,6 +56,44 @@ function isSafeDataImageUrl(value: string): boolean {
   return /^data:image\/(png|jpeg|jpg|webp);base64,[A-Za-z0-9+/=]+$/i.test(
     value.trim()
   );
+}
+
+function resolveGpsSpeedMs(
+  pos: GeolocationPosition,
+  prevFix: { lat: number; lng: number; time: number } | null
+): number {
+  const rawSpeed = pos.coords.speed;
+  if (typeof rawSpeed === 'number' && Number.isFinite(rawSpeed) && rawSpeed >= 0) {
+    const kmh = rawSpeed * 3.6;
+    return kmh < 1.5 ? 0 : Math.min(110 / 3.6, rawSpeed);
+  }
+  const accuracy =
+    typeof pos.coords.accuracy === 'number' &&
+    Number.isFinite(pos.coords.accuracy) &&
+    pos.coords.accuracy > 0
+      ? pos.coords.accuracy
+      : null;
+  if (prevFix && (accuracy === null || accuracy <= 45)) {
+    const dtSec = (Date.now() - prevFix.time) / 1000;
+    if (dtSec >= 2) {
+      const movedMeters =
+        haversineDistanceKm(
+          prevFix.lat,
+          prevFix.lng,
+          pos.coords.latitude,
+          pos.coords.longitude
+        ) * 1000;
+      const minMoveMeters = Math.max(12, (accuracy ?? 15) * 0.5);
+      if (movedMeters > minMoveMeters) {
+        const estMs = movedMeters / dtSec;
+        const estKmh = estMs * 3.6;
+        if (estKmh >= 2 && estKmh <= 105) {
+          return estMs;
+        }
+      }
+    }
+  }
+  return 0;
 }
 
 async function compressLicenseImage(file: File): Promise<string> {
@@ -107,8 +147,6 @@ interface TimingFormState {
   stopsText: string;
   departureTime: string;
   arrivalTime: string;
-  frequency: string;
-  status: 'On Time' | 'Delayed' | 'Scheduled';
 }
 
 const EMPTY_FORM: TimingFormState = {
@@ -116,11 +154,19 @@ const EMPTY_FORM: TimingFormState = {
   startPoint: '',
   endPoint: '',
   stopsText: '',
-  departureTime: '08:00',
-  arrivalTime: '08:45',
-  frequency: 'Every 20 min',
-  status: 'On Time',
+  departureTime: '',
+  arrivalTime: '',
 };
+
+function computeScheduleDurationMinutes(dep: string, reach: string): number | null {
+  const m1 = /^(\d{2}):(\d{2})$/.exec(dep.trim());
+  const m2 = /^(\d{2}):(\d{2})$/.exec(reach.trim());
+  if (!m1 || !m2) return null;
+  const start = Number(m1[1]) * 60 + Number(m1[2]);
+  let end = Number(m2[1]) * 60 + Number(m2[2]);
+  if (end < start) end += 1440;
+  return end - start;
+}
 
 interface OperationsPortalProps {
   initialMode: OpsMode;
@@ -154,9 +200,30 @@ export function OperationsPortal({
   }, [initialMode]);
 
   // --- DRIVER STATE ---
-  const [driver, setDriver] = useState<DriverProfile | null>(null);
-  const [driverToken, setDriverToken] = useState<string | null>(null);
-  const [driverStep, setDriverStep] = useState<DriverStep>('login');
+  const [driver, setDriver] = useState<DriverProfile | null>(() => {
+    try {
+      const raw = localStorage.getItem('mybus_driver_profile');
+      return raw ? (JSON.parse(raw) as DriverProfile) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [driverToken, setDriverToken] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem('mybus_driver_token');
+    } catch {
+      return null;
+    }
+  });
+  const [driverStep, setDriverStep] = useState<DriverStep>(() => {
+    try {
+      const hasToken = Boolean(localStorage.getItem('mybus_driver_token'));
+      const hasProfile = Boolean(localStorage.getItem('mybus_driver_profile'));
+      return hasToken && hasProfile ? 'permission' : 'login';
+    } catch {
+      return 'login';
+    }
+  });
   const [driverAuthMode, setDriverAuthMode] = useState<'login' | 'register'>(
     'login'
   );
@@ -180,16 +247,26 @@ export function OperationsPortal({
     lng: number;
     heading: number | null;
     speedMs: number | null;
+    accuracy?: number | null;
+    recordedAt?: number;
   } | null>(null);
 
   // Route Places State
-  const [startPoint, setStartPoint] = useState('Central Station');
-  const [endPoint, setEndPoint] = useState('Airport Terminal 2');
-  const [routeStops, setRouteStops] = useState<string[]>(['City Market']);
+  const [startPoint, setStartPoint] = useState('');
+  const [endPoint, setEndPoint] = useState('');
+  const [routeStops, setRouteStops] = useState<string[]>([]);
+  const [driverDepartureTime, setDriverDepartureTime] = useState('');
+  const [driverReachingTime, setDriverReachingTime] = useState('');
+  const [scheduleFeedback, setScheduleFeedback] = useState<string | null>(null);
   const [savedStopFlashIdx, setSavedStopFlashIdx] = useState<number | null>(
     null
   );
   const stopInputRefs = useRef<Array<HTMLInputElement | null>>([]);
+
+  // Completed Tours State
+  const [completedTours, setCompletedTours] = useState<CompletedTour[]>([]);
+  const [showCompletedTours, setShowCompletedTours] = useState(false);
+  const [tourLoadedBanner, setTourLoadedBanner] = useState<string | null>(null);
 
   // Bus Incident Status State
   const [busStatus, setBusStatus] = useState<BusIncidentStatus>('Normal');
@@ -197,6 +274,7 @@ export function OperationsPortal({
   const [statusFeedback, setStatusFeedback] = useState<string | null>(null);
 
   const [isSharing, setIsSharing] = useState(false);
+  const [gpsWatching, setGpsWatching] = useState(false);
   const [sharingBanner, setSharingBanner] = useState<string | null>(null);
 
   // --- ADMIN STATE ---
@@ -206,8 +284,8 @@ export function OperationsPortal({
   const [adminEmail, setAdminEmail] = useState<string>(
     () => sessionStorage.getItem('mybus_admin_email') || ''
   );
-  const [emailInput, setEmailInput] = useState('admin@mybus.app');
-  const [passwordInput, setPasswordInput] = useState('admin123');
+  const [emailInput, setEmailInput] = useState('');
+  const [passwordInput, setPasswordInput] = useState('');
   const [adminLoginError, setAdminLoginError] = useState<string | null>(null);
   const [adminLoginLoading, setAdminLoginLoading] = useState(false);
   const [adminSubView, setAdminSubView] = useState<AdminSubView>('dashboard');
@@ -230,10 +308,17 @@ export function OperationsPortal({
   const [formError, setFormError] = useState<string | null>(null);
 
   const watchIdRef = useRef<number | null>(null);
+  const lastGpsFixRef = useRef<{ lat: number; lng: number; time: number } | null>(
+    null
+  );
+  const justStoppedUntilRef = useRef<number>(0);
+  const hydratedDriverKeyRef = useRef<string | null>(null);
   const livePayloadRef = useRef({
     startPoint,
     endPoint,
     routeStops,
+    driverDepartureTime,
+    driverReachingTime,
     busStatus,
     statusNote,
   });
@@ -241,6 +326,8 @@ export function OperationsPortal({
     startPoint,
     endPoint,
     routeStops,
+    driverDepartureTime,
+    driverReachingTime,
     busStatus,
     statusNote,
   };
@@ -250,6 +337,7 @@ export function OperationsPortal({
       navigator.geolocation.clearWatch(watchIdRef.current);
       watchIdRef.current = null;
     }
+    setGpsWatching(false);
   }, []);
 
   const handleForceStopped = useCallback(
@@ -294,6 +382,29 @@ export function OperationsPortal({
     }
   }, [adminToken, handleAdminLogout]);
 
+  const fetchDriverTours = useCallback(async () => {
+    if (!driverToken) return;
+    try {
+      const res = await fetch('/api/driver/tours', {
+        headers: { Authorization: `Bearer ${driverToken}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.tours)) {
+          setCompletedTours(data.tours);
+        }
+      } else if (res.status === 401 || res.status === 403) {
+        localStorage.removeItem('mybus_driver_token');
+        localStorage.removeItem('mybus_driver_profile');
+        setDriverToken(null);
+        setDriver(null);
+        setDriverStep('login');
+      }
+    } catch {
+      // Handled gracefully
+    }
+  }, [driverToken]);
+
   const {
     timings,
     liveBuses,
@@ -312,6 +423,11 @@ export function OperationsPortal({
         void fetchAdminDrivers();
       }
     },
+    onToursUpdated: () => {
+      if (driverToken) {
+        void fetchDriverTours();
+      }
+    },
   });
 
   useEffect(() => {
@@ -321,10 +437,228 @@ export function OperationsPortal({
   }, [adminToken, fetchAdminDrivers]);
 
   useEffect(() => {
+    if (driverToken) {
+      void fetchDriverTours();
+    } else {
+      setCompletedTours([]);
+    }
+  }, [driverToken, fetchDriverTours]);
+
+  const startGpsWatchForDriver = useCallback(
+    (activeDriver: DriverProfile) => {
+      if (!navigator.geolocation) return;
+      stopGpsWatch();
+      setGpsWatching(true);
+      watchIdRef.current = navigator.geolocation.watchPosition(
+        (pos) => {
+          const now = Date.now();
+          const accuracy =
+            typeof pos.coords.accuracy === 'number' &&
+            Number.isFinite(pos.coords.accuracy)
+              ? pos.coords.accuracy
+              : null;
+          const speedMs = resolveGpsSpeedMs(pos, lastGpsFixRef.current);
+          if (accuracy === null || accuracy <= 100 || !lastGpsFixRef.current) {
+            lastGpsFixRef.current = {
+              lat: pos.coords.latitude,
+              lng: pos.coords.longitude,
+              time: now,
+            };
+          }
+          const coords = {
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude,
+            heading:
+              typeof pos.coords.heading === 'number' &&
+              !Number.isNaN(pos.coords.heading)
+                ? pos.coords.heading
+                : null,
+            speedMs,
+            accuracy,
+            recordedAt: now,
+          };
+          setCurrentCoords(coords);
+          if (
+            livePayloadRef.current.startPoint.trim() &&
+            livePayloadRef.current.endPoint.trim()
+          ) {
+            void sendDriverLocation({
+              driverId: activeDriver.driverId,
+              driverName: activeDriver.name,
+              busNo: activeDriver.busNo,
+              startPoint: livePayloadRef.current.startPoint.trim(),
+              endPoint: livePayloadRef.current.endPoint.trim(),
+              routeStops: livePayloadRef.current.routeStops
+                .map((s) => s.trim())
+                .filter(Boolean),
+              departureTime: livePayloadRef.current.driverDepartureTime,
+              reachingTime: livePayloadRef.current.driverReachingTime,
+              lat: coords.lat,
+              lng: coords.lng,
+              heading: coords.heading,
+              speedMs: coords.speedMs,
+              accuracy: coords.accuracy,
+              busStatus: livePayloadRef.current.busStatus,
+              statusNote: livePayloadRef.current.statusNote.trim(),
+            });
+          }
+        },
+        (err) => {
+          setGpsWatching(false);
+          setSharingBanner(`GPS tracking warning: ${err.message}`);
+        },
+        { enableHighAccuracy: true, maximumAge: 2000, timeout: 15000 }
+      );
+    },
+    [sendDriverLocation, stopGpsWatch]
+  );
+
+  const hydrateFromLiveBus = useCallback(
+    (activeBus: LiveBus, activeDriver: DriverProfile) => {
+      hydratedDriverKeyRef.current = activeDriver.driverId;
+      setStartPoint(activeBus.startPoint || '');
+      setEndPoint(activeBus.endPoint || '');
+      setRouteStops(Array.isArray(activeBus.routeStops) ? activeBus.routeStops : []);
+      if (activeBus.departureTime) setDriverDepartureTime(activeBus.departureTime);
+      if (activeBus.reachingTime) setDriverReachingTime(activeBus.reachingTime);
+      setBusStatus(activeBus.busStatus || 'Normal');
+      setStatusNote(activeBus.statusNote || '');
+      const isFresh = Date.now() - activeBus.updatedAt < 12000;
+      setCurrentCoords({
+        lat: activeBus.lat,
+        lng: activeBus.lng,
+        heading: activeBus.heading ?? null,
+        speedMs:
+          isFresh &&
+          typeof activeBus.speedKmh === 'number' &&
+          activeBus.speedKmh > 0
+            ? activeBus.speedKmh / 3.6
+            : 0,
+        accuracy: null,
+        recordedAt: activeBus.updatedAt,
+      });
+      lastGpsFixRef.current = {
+        lat: activeBus.lat,
+        lng: activeBus.lng,
+        time: activeBus.updatedAt,
+      };
+      setIsSharing(true);
+      setPermissionStatus('granted');
+      setDriverStep('route');
+
+      if (watchIdRef.current === null && navigator.permissions?.query) {
+        void navigator.permissions
+          .query({ name: 'geolocation' })
+          .then((perm) => {
+            if (perm.state === 'granted' && watchIdRef.current === null) {
+              startGpsWatchForDriver(activeDriver);
+            }
+          })
+          .catch(() => {
+            // Ignore permissions query fallback
+          });
+      }
+    },
+    [startGpsWatchForDriver]
+  );
+
+  useEffect(() => {
+    if (!driver) return;
+    const activeBus = liveBuses.find(
+      (b) => b.driverId.toUpperCase() === driver.driverId.toUpperCase()
+    );
+    if (activeBus && Date.now() > justStoppedUntilRef.current) {
+      if (!isSharing) {
+        hydrateFromLiveBus(activeBus, driver);
+      }
+      return;
+    }
+
+    if (hydratedDriverKeyRef.current === driver.driverId) {
+      return;
+    }
+
+    const matchingTiming = timings.find(
+      (item) =>
+        item.busNo.trim().toUpperCase() === driver.busNo.trim().toUpperCase()
+    );
+    if (matchingTiming) {
+      setStartPoint(matchingTiming.startPoint);
+      setEndPoint(matchingTiming.endPoint);
+      setRouteStops(matchingTiming.stops);
+      setDriverDepartureTime(matchingTiming.departureTime);
+      setDriverReachingTime(matchingTiming.arrivalTime);
+      hydratedDriverKeyRef.current = driver.driverId;
+    }
+    try {
+      const savedRaw = localStorage.getItem(
+        `mybus_driver_schedule_${driver.driverId}`
+      );
+      if (savedRaw) {
+        const parsed = JSON.parse(savedRaw) as {
+          departureTime?: string;
+          reachingTime?: string;
+        };
+        if (parsed.departureTime) setDriverDepartureTime(parsed.departureTime);
+        if (parsed.reachingTime) setDriverReachingTime(parsed.reachingTime);
+      }
+    } catch {
+      // Ignore storage error
+    }
+  }, [driver, timings, liveBuses, isSharing, hydrateFromLiveBus]);
+
+  useEffect(() => {
     return () => {
       stopGpsWatch();
     };
   }, [stopGpsWatch]);
+
+  // Reset speed to 0 km/h when driver stops moving (no GPS movement for >= 10s)
+  useEffect(() => {
+    if (!isSharing || !driver) return;
+    const timer = window.setInterval(() => {
+      const now = Date.now();
+      const lastRecorded = currentCoords?.recordedAt ?? 0;
+      const isIdle = now - lastRecorded >= 10000;
+      if (!isIdle) return;
+
+      if (currentCoords && currentCoords.speedMs && currentCoords.speedMs > 0) {
+        setCurrentCoords((prev) => (prev ? { ...prev, speedMs: 0 } : prev));
+      }
+
+      const activeBus = liveBuses.find(
+        (b) => b.driverId.toUpperCase() === driver.driverId.toUpperCase()
+      );
+      if (
+        activeBus &&
+        activeBus.speedKmh > 0 &&
+        currentCoords &&
+        livePayloadRef.current.startPoint.trim() &&
+        livePayloadRef.current.endPoint.trim()
+      ) {
+        void sendDriverLocation({
+          driverId: driver.driverId,
+          driverName: driver.name,
+          busNo: driver.busNo,
+          startPoint: livePayloadRef.current.startPoint.trim(),
+          endPoint: livePayloadRef.current.endPoint.trim(),
+          routeStops: livePayloadRef.current.routeStops
+            .map((s) => s.trim())
+            .filter(Boolean),
+          departureTime: livePayloadRef.current.driverDepartureTime,
+          reachingTime: livePayloadRef.current.driverReachingTime,
+          lat: currentCoords.lat,
+          lng: currentCoords.lng,
+          heading: currentCoords.heading,
+          speedMs: 0,
+          accuracy: currentCoords.accuracy ?? null,
+          busStatus: livePayloadRef.current.busStatus,
+          statusNote: livePayloadRef.current.statusNote.trim(),
+        });
+      }
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [isSharing, driver, currentCoords, liveBuses, sendDriverLocation]);
 
   const handleLicenseFileChange = async (
     e: React.ChangeEvent<HTMLInputElement>
@@ -400,9 +734,34 @@ export function OperationsPortal({
         return;
       }
 
+      const loggedDriver = data.driver as DriverProfile;
+      try {
+        localStorage.setItem('mybus_driver_token', data.token);
+        localStorage.setItem(
+          'mybus_driver_profile',
+          JSON.stringify(loggedDriver)
+        );
+      } catch {
+        // Ignore storage error
+      }
+      if (Array.isArray(data.completedTours)) {
+        setCompletedTours(data.completedTours);
+      }
       setDriverToken(data.token);
-      setDriver(data.driver);
-      setDriverStep('permission');
+      setDriver(loggedDriver);
+
+      const serverActiveBus: LiveBus | undefined =
+        data.activeLiveBus ||
+        liveBuses.find(
+          (b) =>
+            b.driverId.toUpperCase() === loggedDriver.driverId.toUpperCase()
+        );
+
+      if (serverActiveBus) {
+        hydrateFromLiveBus(serverActiveBus, loggedDriver);
+      } else {
+        setDriverStep('permission');
+      }
     } catch {
       setDriverAuthError('Network error while connecting to server.');
     } finally {
@@ -420,6 +779,18 @@ export function OperationsPortal({
     setPermissionError(null);
     navigator.geolocation.getCurrentPosition(
       (pos) => {
+        const now = Date.now();
+        const accuracy =
+          typeof pos.coords.accuracy === 'number' &&
+          Number.isFinite(pos.coords.accuracy)
+            ? pos.coords.accuracy
+            : null;
+        const speedMs = resolveGpsSpeedMs(pos, lastGpsFixRef.current);
+        lastGpsFixRef.current = {
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+          time: now,
+        };
         setCurrentCoords({
           lat: pos.coords.latitude,
           lng: pos.coords.longitude,
@@ -428,11 +799,9 @@ export function OperationsPortal({
             !Number.isNaN(pos.coords.heading)
               ? pos.coords.heading
               : null,
-          speedMs:
-            typeof pos.coords.speed === 'number' &&
-            !Number.isNaN(pos.coords.speed)
-              ? pos.coords.speed
-              : null,
+          speedMs,
+          accuracy,
+          recordedAt: now,
         });
         setPermissionStatus('granted');
         setDriverStep('route');
@@ -493,6 +862,8 @@ export function OperationsPortal({
         startPoint: startPoint.trim(),
         endPoint: endPoint.trim(),
         routeStops: updatedStops.map((s) => s.trim()).filter(Boolean),
+        departureTime: driverDepartureTime,
+        reachingTime: driverReachingTime,
         ...currentCoords,
         busStatus,
         statusNote: statusNote.trim(),
@@ -504,6 +875,55 @@ export function OperationsPortal({
     }, 20);
   };
 
+  const handleSaveDriverSchedule = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setScheduleFeedback(null);
+    if (!driver) return;
+    try {
+      localStorage.setItem(
+        `mybus_driver_schedule_${driver.driverId}`,
+        JSON.stringify({
+          departureTime: driverDepartureTime,
+          reachingTime: driverReachingTime,
+        })
+      );
+    } catch {
+      // Ignore storage errors
+    }
+    if (isSharing) {
+      await sendDriverStatus({
+        driverId: driver.driverId,
+        busStatus,
+        statusNote: statusNote.trim(),
+        departureTime: driverDepartureTime,
+        reachingTime: driverReachingTime,
+      });
+    } else if (driverToken && startPoint.trim() && endPoint.trim()) {
+      try {
+        await fetch('/api/driver/tour-sync', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${driverToken}`,
+          },
+          body: JSON.stringify({
+            startPoint: startPoint.trim(),
+            endPoint: endPoint.trim(),
+            routeStops: routeStops.map((s) => s.trim()).filter(Boolean),
+            departureTime: driverDepartureTime,
+            reachingTime: driverReachingTime,
+            busStatus,
+          }),
+        });
+      } catch {
+        // Sync will also occur when sharing starts
+      }
+    }
+    setScheduleFeedback(
+      `${t.scheduleSavedMsg} (${driverDepartureTime} → ${driverReachingTime})`
+    );
+  };
+
   const handleUpdateBusStatus = async () => {
     setStatusFeedback(null);
     if (!driver) return;
@@ -513,6 +933,8 @@ export function OperationsPortal({
         driverId: driver.driverId,
         busStatus,
         statusNote: statusNote.trim(),
+        departureTime: driverDepartureTime,
+        reachingTime: driverReachingTime,
       });
       setStatusFeedback(
         lang === 'kn'
@@ -525,6 +947,59 @@ export function OperationsPortal({
           ? `ಸ್ಥಿತಿ "${statusLabel}" ಎಂದು ಸಿದ್ಧಪಡಿಸಲಾಗಿದೆ — ಹಂಚಿಕೆ ಪ್ರಾರಂಭಿಸಿದಾಗ ಕಳುಹಿಸಲಾಗುತ್ತದೆ.`
           : `Status set to "${statusLabel}" — it will be broadcast when you start sharing.`
       );
+    }
+  };
+
+  const handleApplyCompletedTour = (tour: CompletedTour) => {
+    if (!driver) return;
+    hydratedDriverKeyRef.current = driver.driverId;
+    setStartPoint(tour.startPoint);
+    setEndPoint(tour.endPoint);
+    setRouteStops(Array.isArray(tour.routeStops) ? [...tour.routeStops] : []);
+    if (tour.departureTime) setDriverDepartureTime(tour.departureTime);
+    if (tour.reachingTime) setDriverReachingTime(tour.reachingTime);
+    if (tour.departureTime || tour.reachingTime) {
+      try {
+        localStorage.setItem(
+          `mybus_driver_schedule_${driver.driverId}`,
+          JSON.stringify({
+            departureTime: tour.departureTime || driverDepartureTime,
+            reachingTime: tour.reachingTime || driverReachingTime,
+          })
+        );
+      } catch {
+        // Ignore storage error
+      }
+    }
+    setSharingBanner(null);
+    setShowCompletedTours(false);
+    setTourLoadedBanner(`${tour.startPoint} → ${tour.endPoint} · ${t.tourLoadedMsg}`);
+    if (isSharing) {
+      void sendDriverStatus({
+        driverId: driver.driverId,
+        busStatus,
+        statusNote: statusNote.trim(),
+        departureTime: tour.departureTime || driverDepartureTime,
+        reachingTime: tour.reachingTime || driverReachingTime,
+      });
+    }
+  };
+
+  const handleDeleteCompletedTour = async (tourId: string) => {
+    if (!driverToken) return;
+    try {
+      const res = await fetch(
+        `/api/driver/tours/${encodeURIComponent(tourId)}`,
+        {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${driverToken}` },
+        }
+      );
+      if (res.ok) {
+        setCompletedTours((prev) => prev.filter((item) => item.id !== tourId));
+      }
+    } catch {
+      // Handled gracefully
     }
   };
 
@@ -547,38 +1022,10 @@ export function OperationsPortal({
       return;
     }
 
+    justStoppedUntilRef.current = 0;
     setSharingBanner(null);
+    setTourLoadedBanner(null);
     setIsSharing(true);
-
-    const publishFix = (pos: GeolocationPosition) => {
-      const coords = {
-        lat: pos.coords.latitude,
-        lng: pos.coords.longitude,
-        heading:
-          typeof pos.coords.heading === 'number' &&
-          !Number.isNaN(pos.coords.heading)
-            ? pos.coords.heading
-            : null,
-        speedMs:
-          typeof pos.coords.speed === 'number' && !Number.isNaN(pos.coords.speed)
-            ? pos.coords.speed
-            : null,
-      };
-      setCurrentCoords(coords);
-      void sendDriverLocation({
-        driverId: driver.driverId,
-        driverName: driver.name,
-        busNo: driver.busNo,
-        startPoint: livePayloadRef.current.startPoint.trim(),
-        endPoint: livePayloadRef.current.endPoint.trim(),
-        routeStops: livePayloadRef.current.routeStops
-          .map((s) => s.trim())
-          .filter(Boolean),
-        ...coords,
-        busStatus: livePayloadRef.current.busStatus,
-        statusNote: livePayloadRef.current.statusNote.trim(),
-      });
-    };
 
     if (currentCoords) {
       void sendDriverLocation({
@@ -588,28 +1035,39 @@ export function OperationsPortal({
         startPoint: startPoint.trim(),
         endPoint: endPoint.trim(),
         routeStops: routeStops.map((s) => s.trim()).filter(Boolean),
+        departureTime: driverDepartureTime,
+        reachingTime: driverReachingTime,
         ...currentCoords,
         busStatus,
         statusNote: statusNote.trim(),
       });
     }
 
-    stopGpsWatch();
-    watchIdRef.current = navigator.geolocation.watchPosition(
-      publishFix,
-      (err) => {
-        setSharingBanner(`GPS tracking warning: ${err.message}`);
-      },
-      { enableHighAccuracy: true, maximumAge: 2000, timeout: 15000 }
-    );
+    startGpsWatchForDriver(driver);
+  };
+
+  const handleResumeGpsWatch = () => {
+    if (!driver) return;
+    if (!navigator.geolocation) {
+      setSharingBanner('Geolocation is unavailable on this device.');
+      return;
+    }
+    setSharingBanner(t.gpsResumedBanner);
+    startGpsWatchForDriver(driver);
   };
 
   const handleStopSharing = async () => {
+    justStoppedUntilRef.current = Date.now() + 4000;
     stopGpsWatch();
     setIsSharing(false);
-    setSharingBanner('Live location sharing stopped.');
+    setSharingBanner(
+      lang === 'kn'
+        ? 'ನೇರ ಸ್ಥಳ ಹಂಚಿಕೆ ನಿಲ್ಲಿಸಲಾಗಿದೆ ಮತ್ತು ಪ್ರವಾಸವನ್ನು ಉಳಿಸಲಾಗಿದೆ.'
+        : 'Live location sharing stopped and tour saved.'
+    );
     if (driver) {
       await sendDriverStop(driver.driverId);
+      await fetchDriverTours();
     }
   };
 
@@ -617,10 +1075,31 @@ export function OperationsPortal({
     if (isSharing && driver) {
       await handleStopSharing();
     }
-    sessionStorage.removeItem('mybus_driver_profile');
+    try {
+      localStorage.removeItem('mybus_driver_token');
+      localStorage.removeItem('mybus_driver_profile');
+      sessionStorage.removeItem('mybus_driver_profile');
+    } catch {
+      // Ignore storage error
+    }
+    hydratedDriverKeyRef.current = null;
+    lastGpsFixRef.current = null;
     setDriverToken(null);
     setDriver(null);
     setDriverStep('login');
+    setCompletedTours([]);
+    setShowCompletedTours(false);
+    setTourLoadedBanner(null);
+    setStartPoint('');
+    setEndPoint('');
+    setRouteStops([]);
+    setDriverDepartureTime('');
+    setDriverReachingTime('');
+    setScheduleFeedback(null);
+    setStatusFeedback(null);
+    setSharingBanner(null);
+    setBusStatus('Normal');
+    setStatusNote('');
   };
 
   // --- ADMIN HANDLERS ---
@@ -689,6 +1168,42 @@ export function OperationsPortal({
     }
   };
 
+  const handleDeleteDriver = async (driverId: string) => {
+    if (!adminToken) return;
+    setReviewingDriverId(driverId);
+    setAdminActionMsg(null);
+    try {
+      const res = await fetch(
+        `/api/admin/drivers/${encodeURIComponent(driverId)}`,
+        {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${adminToken}` },
+        }
+      );
+      if (res.status === 401) {
+        handleAdminLogout();
+        return;
+      }
+      const data = await res.json();
+      if (!res.ok) {
+        setAdminActionMsg(data.error || 'Failed to delete driver.');
+      } else {
+        if (previewLicenseDriver?.driverId === driverId) {
+          setPreviewLicenseDriver(null);
+        }
+        setAdminActionMsg(
+          `Deleted driver ${driverId} and removed all their data.`
+        );
+        await fetchAdminDrivers();
+        await refresh();
+      }
+    } catch {
+      setAdminActionMsg('Network error deleting driver.');
+    } finally {
+      setReviewingDriverId(null);
+    }
+  };
+
   const handleStopDriverSharing = async (driverId: string, busNo: string) => {
     if (!adminToken) return;
     setAdminActionMsg(null);
@@ -730,8 +1245,6 @@ export function OperationsPortal({
         .filter(Boolean),
       departureTime: formState.departureTime.trim(),
       arrivalTime: formState.arrivalTime.trim(),
-      frequency: formState.frequency.trim(),
-      status: formState.status,
     };
 
     try {
@@ -789,24 +1302,37 @@ export function OperationsPortal({
     ? liveBuses.find((b) => b.driverId === driver.driverId)
     : undefined;
 
+  const displayedSpeedKmh = (() => {
+    if (
+      currentCoords &&
+      typeof currentCoords.speedMs === 'number' &&
+      Number.isFinite(currentCoords.speedMs) &&
+      currentCoords.speedMs >= 0
+    ) {
+      const kmh = currentCoords.speedMs * 3.6;
+      return kmh < 1.5 ? 0 : Math.min(110, Math.round(kmh));
+    }
+    if (currentDriverBus && Date.now() - currentDriverBus.updatedAt < 12000) {
+      return currentDriverBus.speedKmh;
+    }
+    return 0;
+  })();
+
   const driverMapBuses: LiveBus[] = currentDriverBus
-    ? [currentDriverBus]
+    ? [{ ...currentDriverBus, speedKmh: displayedSpeedKmh }]
     : driver && currentCoords
     ? [
         {
           driverId: driver.driverId,
           driverName: driver.name,
           busNo: driver.busNo,
-          startPoint: startPoint || 'Origin',
-          endPoint: endPoint || 'Destination',
+          startPoint: startPoint.trim(),
+          endPoint: endPoint.trim(),
           routeStops: routeStops.filter(Boolean),
           lat: currentCoords.lat,
           lng: currentCoords.lng,
           heading: currentCoords.heading,
-          speedKmh:
-            typeof currentCoords.speedMs === 'number'
-              ? Math.round(currentCoords.speedMs * 3.6)
-              : 0,
+          speedKmh: displayedSpeedKmh,
           directionText: 'Ready to share',
           busStatus,
           statusNote,
@@ -868,9 +1394,24 @@ export function OperationsPortal({
       </header>
 
       <datalist id="mybus-ops-kannada-stops">
-        {KANNADA_STOP_SUGGESTIONS.map((s) => (
-          <option key={s} value={s} />
-        ))}
+        {Array.from(
+          new Set([
+            ...timings.flatMap((item) => [
+              item.startPoint,
+              ...item.stops,
+              item.endPoint,
+            ]),
+            ...liveBuses.flatMap((b) => [
+              b.startPoint,
+              ...b.routeStops,
+              b.endPoint,
+            ]),
+          ].filter(Boolean))
+        )
+          .sort((a, b) => a.localeCompare(b))
+          .map((s) => (
+            <option key={s} value={s} />
+          ))}
       </datalist>
 
       {/* ==================== DRIVER CONSOLE ==================== */}
@@ -1142,13 +1683,33 @@ export function OperationsPortal({
                     <ArrowLeft className="w-4 h-4" />
                     <span>{t.back}</span>
                   </button>
-                  <div>
-                    <h1 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">
-                      {driver.busNo} · {driver.name}
-                    </h1>
-                    <p className="text-xs font-mono text-slate-500 dark:text-slate-400">
-                      {driver.driverId}
-                    </p>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div>
+                      <h1 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">
+                        {driver.busNo} · {driver.name}
+                      </h1>
+                      <p className="text-xs font-mono text-slate-500 dark:text-slate-400">
+                        {driver.driverId}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowCompletedTours((v) => !v)}
+                      aria-expanded={showCompletedTours}
+                      className={`min-h-[40px] px-3 py-1.5 text-xs font-semibold rounded-lg border flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap ${
+                        showCompletedTours
+                          ? 'bg-blue-700 border-blue-700 text-white dark:bg-blue-600 dark:border-blue-600'
+                          : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
+                      }`}
+                    >
+                      <RotateCcw className="w-3.5 h-3.5 shrink-0" />
+                      <span>
+                        {t.completedToursTitle}
+                        {completedTours.length > 0
+                          ? ` (${completedTours.length})`
+                          : ''}
+                      </span>
+                    </button>
                   </div>
                 </div>
 
@@ -1178,8 +1739,135 @@ export function OperationsPortal({
                 </div>
               </div>
 
+              {isSharing && (
+                <div className="mb-4 p-4 rounded-xl border border-emerald-200 dark:border-emerald-900/70 bg-emerald-50 dark:bg-emerald-950/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-start gap-2.5 min-w-0">
+                    <Radio className="w-4 h-4 text-emerald-700 dark:text-emerald-400 shrink-0 mt-0.5 animate-pulse" />
+                    <div className="text-xs sm:text-sm text-emerald-900 dark:text-emerald-100">
+                      <p className="font-semibold">
+                        {t.sharingLive} ({startPoint || '—'} → {endPoint || '—'})
+                      </p>
+                      <p className="text-xs text-emerald-800/90 dark:text-emerald-200/80 mt-0.5">
+                        {t.activeLiveRestoredBanner}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {!gpsWatching && (
+                      <button
+                        type="button"
+                        onClick={handleResumeGpsWatch}
+                        className="min-h-[40px] px-3 py-1.5 rounded-lg border border-emerald-600 dark:border-emerald-500 text-emerald-800 dark:text-emerald-200 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                      >
+                        <Navigation className="w-3.5 h-3.5" />
+                        <span>{t.resumeGpsBtn}</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={handleStopSharing}
+                      className="min-h-[40px] px-3.5 py-1.5 rounded-lg bg-slate-900 dark:bg-red-600 hover:bg-slate-800 dark:hover:bg-red-500 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                    >
+                      <Square className="w-3.5 h-3.5" />
+                      <span>{t.stopSharing}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
                 <section className="lg:col-span-5 flex flex-col gap-4">
+                  {/* 0. Completed Tours (Shown only when button next to driver name is clicked) */}
+                  {showCompletedTours && (
+                    <div className="bg-white dark:bg-slate-900 border border-blue-200 dark:border-blue-900/70 rounded-xl p-5 space-y-3 shadow-xs">
+                      <div className="flex items-center justify-between gap-2">
+                        <h2 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                          <RotateCcw className="w-4 h-4 text-blue-700 dark:text-blue-400" />
+                          <span>{t.completedToursTitle}</span>
+                        </h2>
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-xs text-slate-500 dark:text-slate-400 tabular-nums">
+                            {completedTours.length}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setShowCompletedTours(false)}
+                            aria-label={t.close}
+                            className="min-w-[32px] min-h-[32px] rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center text-slate-500 cursor-pointer"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        {t.completedToursHint}
+                      </p>
+
+                      {completedTours.length === 0 ? (
+                        <p className="text-xs text-slate-500 dark:text-slate-400 py-2">
+                          {t.noCompletedTours}
+                        </p>
+                      ) : (
+                        <div className="space-y-2 max-h-[240px] overflow-y-auto pr-1">
+                          {completedTours.map((tour) => (
+                            <div
+                              key={tour.id}
+                              className="group flex items-start justify-between gap-2 p-3 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 hover:border-blue-600 dark:hover:border-blue-500 transition-colors"
+                            >
+                              <button
+                                type="button"
+                                onClick={() => handleApplyCompletedTour(tour)}
+                                className="flex-1 text-left min-w-0 cursor-pointer"
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-xs sm:text-sm font-semibold text-slate-900 dark:text-white truncate">
+                                    {tour.startPoint} → {tour.endPoint}
+                                  </span>
+                                  <span className="font-mono text-[11px] font-semibold text-blue-700 dark:text-blue-400 shrink-0">
+                                    {tour.busNo}
+                                  </span>
+                                </div>
+                                {tour.routeStops.length > 0 && (
+                                  <p className="text-[11px] text-slate-600 dark:text-slate-400 mt-1 truncate">
+                                    {tour.routeStops.join(' · ')}
+                                  </p>
+                                )}
+                                <div className="flex flex-wrap items-center gap-2 mt-1.5 text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                                  {(tour.departureTime || tour.reachingTime) && (
+                                    <span>
+                                      {tour.departureTime || '--:--'} →{' '}
+                                      {tour.reachingTime || '--:--'}
+                                    </span>
+                                  )}
+                                  <span>
+                                    · {tour.completedCount}× {t.completedTimesLabel}
+                                  </span>
+                                  <span>
+                                    ·{' '}
+                                    {new Date(
+                                      tour.lastCompletedAt
+                                    ).toLocaleDateString()}
+                                  </span>
+                                </div>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void handleDeleteCompletedTour(tour.id);
+                                }}
+                                aria-label="Delete saved tour"
+                                className="min-w-[34px] min-h-[34px] rounded-md text-slate-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 flex items-center justify-center shrink-0 cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {/* 1. Trip & Route Places */}
                   <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-4">
                     <div className="flex items-center justify-between gap-2">
@@ -1196,6 +1884,20 @@ export function OperationsPortal({
                         {isSharing ? t.sharingLive : t.standby}
                       </span>
                     </div>
+
+                    {tourLoadedBanner && (
+                      <div className="p-2.5 rounded-lg bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-900/70 text-xs font-medium text-blue-800 dark:text-blue-200 flex items-center justify-between gap-2">
+                        <span>{tourLoadedBanner}</span>
+                        <button
+                          type="button"
+                          onClick={() => setTourLoadedBanner(null)}
+                          aria-label={t.close}
+                          className="text-blue-600 dark:text-blue-300 hover:opacity-75 cursor-pointer shrink-0"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    )}
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div>
@@ -1346,7 +2048,77 @@ export function OperationsPortal({
                     </div>
                   </div>
 
-                  {/* 2. Driver Bus Incident / Operational Status Reporter */}
+                  {/* 2. Departure Time & Reaching Time Section */}
+                  <form
+                    onSubmit={handleSaveDriverSchedule}
+                    className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-3"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <h2 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                        <Clock className="w-4 h-4 text-blue-700 dark:text-blue-400" />
+                        <span>{t.driverScheduleTitle}</span>
+                      </h2>
+                      {(() => {
+                        const mins = computeScheduleDurationMinutes(
+                          driverDepartureTime,
+                          driverReachingTime
+                        );
+                        return mins !== null ? (
+                          <span className="text-xs font-mono font-semibold text-slate-500 dark:text-slate-400 tabular-nums">
+                            {mins} min
+                          </span>
+                        ) : null;
+                      })()}
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                          {t.departureTime}
+                        </label>
+                        <input
+                          type="time"
+                          required
+                          value={driverDepartureTime}
+                          onChange={(e) => {
+                            setDriverDepartureTime(e.target.value);
+                            setScheduleFeedback(null);
+                          }}
+                          className="w-full min-h-[42px] px-3 py-2 text-sm font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-600"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                          {t.reachingTime}
+                        </label>
+                        <input
+                          type="time"
+                          required
+                          value={driverReachingTime}
+                          onChange={(e) => {
+                            setDriverReachingTime(e.target.value);
+                            setScheduleFeedback(null);
+                          }}
+                          className="w-full min-h-[42px] px-3 py-2 text-sm font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-600"
+                        />
+                      </div>
+                    </div>
+
+                    <button
+                      type="submit"
+                      className="w-full min-h-[42px] px-4 py-2 bg-slate-900 dark:bg-blue-700 hover:bg-slate-800 dark:hover:bg-blue-600 text-white text-xs sm:text-sm font-semibold rounded-lg transition-colors cursor-pointer"
+                    >
+                      {t.saveScheduleBtn}
+                    </button>
+
+                    {scheduleFeedback && (
+                      <p className="text-xs text-emerald-700 dark:text-emerald-400 font-medium">
+                        {scheduleFeedback}
+                      </p>
+                    )}
+                  </form>
+
+                  {/* 3. Driver Bus Incident / Operational Status Reporter */}
                   <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-3">
                     <div className="flex items-center justify-between">
                       <h2 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
@@ -1438,7 +2210,7 @@ export function OperationsPortal({
                           currentDriverBus?.heading !== undefined
                             ? `${Math.round(currentDriverBus.heading)}°`
                             : '--'}{' '}
-                          · {currentDriverBus?.speedKmh ?? 0} km/h
+                          · {displayedSpeedKmh} km/h
                         </span>
                       </div>
                     </div>
@@ -1530,11 +2302,6 @@ export function OperationsPortal({
                     {adminLoginLoading ? '...' : t.signIn}
                   </button>
                 </form>
-
-                <p className="mt-5 pt-4 border-t border-slate-100 dark:border-slate-800 text-xs text-slate-500 dark:text-slate-400">
-                  Demo admin: <span className="font-mono">admin@mybus.app</span>{' '}
-                  / <span className="font-mono">admin123</span>
-                </p>
               </div>
             </div>
           ) : adminSubView === 'dashboard' ? (
@@ -1707,8 +2474,42 @@ export function OperationsPortal({
                     </p>
                   </div>
                 </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAdminActionMsg(null);
+                    setAdminSubView('performance');
+                  }}
+                  className="group text-left bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-blue-600 dark:hover:border-blue-500 rounded-2xl p-6 transition-all shadow-xs cursor-pointer min-h-[172px] flex flex-col justify-between"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="w-11 h-11 rounded-xl bg-blue-50 dark:bg-blue-950/70 text-blue-700 dark:text-blue-400 flex items-center justify-center group-hover:bg-blue-700 group-hover:text-white transition-colors">
+                      <BarChart3 className="w-5 h-5" />
+                    </div>
+                    <span className="font-mono text-sm font-semibold text-slate-500 dark:text-slate-400 tabular-nums">
+                      30d
+                    </span>
+                  </div>
+                  <div className="mt-6">
+                    <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-1">
+                      {t.performanceOverview}
+                    </h2>
+                    <p className="text-sm text-slate-600 dark:text-slate-400">
+                      {t.performanceOverviewDesc}
+                    </p>
+                  </div>
+                </button>
               </div>
             </div>
+          ) : adminSubView === 'performance' ? (
+            <PerformanceOverview
+              adminToken={adminToken}
+              theme={theme}
+              lang={lang}
+              onBack={() => setAdminSubView('dashboard')}
+              onUnauthorized={handleAdminLogout}
+            />
           ) : adminSubView === 'timings' ? (
             <div className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-8 py-6 sm:py-8">
               <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
@@ -1818,8 +2619,6 @@ export function OperationsPortal({
                                     stopsText: item.stops.join(', '),
                                     departureTime: item.departureTime,
                                     arrivalTime: item.arrivalTime,
-                                    frequency: item.frequency,
-                                    status: item.status,
                                   });
                                   setFormError(null);
                                   setEditorOpen(true);
@@ -2346,6 +3145,17 @@ export function OperationsPortal({
                                         <span>{t.rejectDriver}</span>
                                       </button>
                                     )}
+                                    <button
+                                      type="button"
+                                      disabled={busy}
+                                      onClick={() =>
+                                        handleDeleteDriver(drv.driverId)
+                                      }
+                                      className="min-h-[34px] px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-red-50 dark:hover:bg-red-950/50 hover:border-red-200 dark:hover:border-red-900 hover:text-red-700 dark:hover:text-red-400 text-slate-600 dark:text-slate-300 text-xs font-semibold inline-flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                      <span>{t.deleteDriver}</span>
+                                    </button>
                                   </div>
                                 </td>
                               </tr>
@@ -2546,41 +3356,20 @@ export function OperationsPortal({
                 </div>
 
                 <form onSubmit={handleSaveTiming} className="space-y-4">
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                        Bus No.
-                      </label>
-                      <input
-                        type="text"
-                        required
-                        value={formState.busNo}
-                        onChange={(e) =>
-                          setFormState({ ...formState, busNo: e.target.value })
-                        }
-                        placeholder="e.g. 705-K"
-                        className="w-full min-h-[42px] px-3 py-2 text-sm font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-600"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                        Status
-                      </label>
-                      <select
-                        value={formState.status}
-                        onChange={(e) =>
-                          setFormState({
-                            ...formState,
-                            status: e.target.value as BusTiming['status'],
-                          })
-                        }
-                        className="w-full min-h-[42px] px-3 py-2 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-600"
-                      >
-                        <option value="On Time">On Time</option>
-                        <option value="Delayed">Delayed</option>
-                        <option value="Scheduled">Scheduled</option>
-                      </select>
-                    </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Bus No.
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={formState.busNo}
+                      onChange={(e) =>
+                        setFormState({ ...formState, busNo: e.target.value })
+                      }
+                      placeholder={t.busNo}
+                      className="w-full min-h-[42px] px-3 py-2 text-sm font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-600"
+                    />
                   </div>
 
                   <div className="flex items-center justify-between gap-2 pb-1">
@@ -2618,7 +3407,7 @@ export function OperationsPortal({
                             startPoint: applyKannadaInput(e.target.value),
                           })
                         }
-                        placeholder="Origin stop"
+                        placeholder={t.startingPoint}
                         className="w-full min-h-[42px] px-3 py-2 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-600"
                       />
                     </div>
@@ -2637,13 +3426,13 @@ export function OperationsPortal({
                             endPoint: applyKannadaInput(e.target.value),
                           })
                         }
-                        placeholder="Destination stop"
+                        placeholder={t.endingPoint}
                         className="w-full min-h-[42px] px-3 py-2 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-600"
                       />
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                       <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                         {t.departureTime}
@@ -2678,23 +3467,6 @@ export function OperationsPortal({
                         className="w-full min-h-[42px] px-3 py-2 text-sm font-mono bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-600"
                       />
                     </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                        {t.frequency}
-                      </label>
-                      <input
-                        type="text"
-                        value={formState.frequency}
-                        onChange={(e) =>
-                          setFormState({
-                            ...formState,
-                            frequency: e.target.value,
-                          })
-                        }
-                        placeholder="Every 20 min"
-                        className="w-full min-h-[42px] px-3 py-2 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-600"
-                      />
-                    </div>
                   </div>
 
                   <div>
@@ -2710,7 +3482,11 @@ export function OperationsPortal({
                           stopsText: applyKannadaInput(e.target.value),
                         })
                       }
-                      placeholder="City Market, Civic Hospital, Metro Hub"
+                      placeholder={
+                        lang === 'kn'
+                          ? 'ಮಧ್ಯಂತರ ನಿಲ್ದಾಣಗಳು (ಅಲ್ಪವಿರಾಮದಿಂದ ಬೇರ್ಪಡಿಸಿ)'
+                          : 'Comma-separated intermediate stops'
+                      }
                       className="w-full min-h-[42px] px-3 py-2 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-600"
                     />
                   </div>

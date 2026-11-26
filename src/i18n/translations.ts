@@ -92,9 +92,12 @@ export interface Translations {
   browserInstallStep1: string;
   browserInstallStep2: string;
   inAppBrowserHint: string;
+  directInstallUnavailableHint: string;
   copyAppLink: string;
   linkCopied: string;
   installNowBtn: string;
+  scanToInstallQr: string;
+  downloadQrBtn: string;
   close: string;
   offlineMessage: string;
   drivingLicenseNumber: string;
@@ -104,6 +107,7 @@ export interface Translations {
   registeredDrivers: string;
   approveDriver: string;
   rejectDriver: string;
+  deleteDriver: string;
   viewLicense: string;
   approved: string;
   pending: string;
@@ -123,6 +127,25 @@ export interface Translations {
   stopGeocodeFailed: string;
   permissionDeniedHint: string;
   approachingAlertPrefix: string;
+  showingTopBusesHint: string;
+  arrivingAtStopCol: string;
+  enterStopForTime: string;
+  liveScheduleBadge: string;
+  driverScheduleTitle: string;
+  reachingTime: string;
+  saveScheduleBtn: string;
+  scheduleSavedMsg: string;
+  tripDurationLabel: string;
+  performanceOverview: string;
+  performanceOverviewDesc: string;
+  activeLiveRestoredBanner: string;
+  resumeGpsBtn: string;
+  gpsResumedBanner: string;
+  completedToursTitle: string;
+  completedToursHint: string;
+  noCompletedTours: string;
+  tourLoadedMsg: string;
+  completedTimesLabel: string;
   incidentLabels: Record<BusIncidentStatus, string>;
 }
 
@@ -149,10 +172,10 @@ export const TRANSLATIONS: Record<AppLang, Translations> = {
     back: 'Back',
     riderApp: 'Rider App',
     yourLocationLabel: 'Your Location / Boarding Stop',
-    yourLocationPlaceholder: 'e.g. City Market, Central Station, ಮೆಜೆಸ್ಟಿಕ್...',
+    yourLocationPlaceholder: 'Enter your boarding stop...',
     destinationLabel:
       'Destination (Shows only buses passing through your location)',
-    destinationPlaceholder: 'Search destination (e.g. Airport Terminal 2)...',
+    destinationPlaceholder: 'Search destination stop...',
     useGps: 'Use GPS',
     locating: 'Locating...',
     busNo: 'Bus No.',
@@ -168,7 +191,7 @@ export const TRANSLATIONS: Record<AppLang, Translations> = {
     scheduled: 'Scheduled',
     clickRowHint: 'Click any row to inspect stop timeline',
     trackRouteLabel: 'Search bus by route, stop, or Bus No.',
-    trackRoutePlaceholder: 'e.g. Airport, Central Station, 101-A...',
+    trackRoutePlaceholder: 'Search route, stop, or Bus No...',
     myGps: 'My GPS',
     liveBuses: 'Live Buses',
     active: 'active',
@@ -206,8 +229,7 @@ export const TRANSLATIONS: Record<AppLang, Translations> = {
     standby: 'Standby',
     updateBusStatus: 'Update Bus Status / Incident',
     broadcastStatus: 'Broadcast Status Update',
-    statusNotePlaceholder:
-      'Optional status note (e.g. Flat tire near City Market)',
+    statusNotePlaceholder: 'Optional status note...',
     kannadaTyping: 'ಕನ್ನಡ Typing',
     adminSignInTitle: 'Admin Console Sign In',
     adminHubTitle: 'Admin Operations Hub',
@@ -228,9 +250,13 @@ export const TRANSLATIONS: Record<AppLang, Translations> = {
     browserInstallStep2: 'Tap "Install app" or "Add to Home screen" to install.',
     inAppBrowserHint:
       'If you opened this link inside WhatsApp, Gmail, or another in-app browser, copy the link and open it in Chrome (Android) or Safari (iPhone).',
+    directInstallUnavailableHint:
+      'Your browser did not enable automatic one-tap install in this tab (this happens if My Bus is already installed, in Incognito/in-app view, on iOS Safari, or if an earlier install popup was dismissed). You can install from the browser menu:',
     copyAppLink: 'Copy App Link',
     linkCopied: 'Link Copied!',
     installNowBtn: 'Install App Now',
+    scanToInstallQr: 'Scan QR on mobile to open & install directly',
+    downloadQrBtn: 'Download QR',
     close: 'Close',
     offlineMessage: 'Offline Mode — Showing cached bus schedules.',
     drivingLicenseNumber: 'Driving Licence Number',
@@ -240,6 +266,7 @@ export const TRANSLATIONS: Record<AppLang, Translations> = {
     registeredDrivers: 'Registered Drivers',
     approveDriver: 'Approve',
     rejectDriver: 'Reject',
+    deleteDriver: 'Delete',
     viewLicense: 'View Licence',
     approved: 'Approved',
     pending: 'Pending',
@@ -263,6 +290,29 @@ export const TRANSLATIONS: Record<AppLang, Translations> = {
     permissionDeniedHint:
       'Browser notifications are blocked — you will still see an instant in-app alert banner here.',
     approachingAlertPrefix: 'Approaching',
+    showingTopBusesHint: 'Showing 3 buses · Search above to find a specific bus',
+    arrivingAtStopCol: 'Arriving at Your Location',
+    enterStopForTime: 'Enter stop above',
+    liveScheduleBadge: 'Live timing',
+    driverScheduleTitle: 'Departure & Reaching Time',
+    reachingTime: 'Reaching Time',
+    saveScheduleBtn: 'Save Schedule Times',
+    scheduleSavedMsg: 'Trip departure and reaching times updated.',
+    tripDurationLabel: 'Scheduled trip',
+    performanceOverview: 'Performance Overview',
+    performanceOverviewDesc:
+      'Driver punctuality trends and on-time metrics over the last 30 days.',
+    activeLiveRestoredBanner:
+      'Your live bus location is still broadcasting to riders. You can stop sharing anytime below.',
+    resumeGpsBtn: 'Resume Live GPS',
+    gpsResumedBanner: 'Live GPS tracking resumed on this device.',
+    completedToursTitle: 'Completed Tours',
+    completedToursHint:
+      'Tap any completed tour to auto-fill your route, stops, and schedule times.',
+    noCompletedTours:
+      'No completed tours yet. When you finish a trip and stop sharing, your tour will be saved here.',
+    tourLoadedMsg: 'Tour details filled automatically. Ready to start sharing.',
+    completedTimesLabel: 'completed',
     incidentLabels: {
       Normal: 'Normal',
       Delayed: 'Delayed',
@@ -293,10 +343,10 @@ export const TRANSLATIONS: Record<AppLang, Translations> = {
     back: 'ಹಿಂದೆ',
     riderApp: 'ಪ್ರಯಾಣಿಕರ ಆ್ಯಪ್',
     yourLocationLabel: 'ನಿಮ್ಮ ಸ್ಥಳ / ಹತ್ತುವ ನಿಲ್ದಾಣ',
-    yourLocationPlaceholder: 'ಉದಾ: ಮೆಜೆಸ್ಟಿಕ್, ಸಿಟಿ ಮಾರ್ಕೆಟ್, Central Station...',
+    yourLocationPlaceholder: 'ನಿಮ್ಮ ಹತ್ತುವ ನಿಲ್ದಾಣವನ್ನು ನಮೂದಿಸಿ...',
     destinationLabel:
       'ಗಮ್ಯಸ್ಥಾನ (ನಿಮ್ಮ ಸ್ಥಳದ ಮೂಲಕ ಹಾದುಹೋಗುವ ಬಸ್‌ಗಳು ಮಾತ್ರ ಕಾಣಿಸುತ್ತವೆ)',
-    destinationPlaceholder: 'ಗಮ್ಯಸ್ಥಾನವನ್ನು ಹುಡುಕಿ (ಉದಾ: Airport)...',
+    destinationPlaceholder: 'ಗಮ್ಯಸ್ಥಾನವನ್ನು ಹುಡುಕಿ...',
     useGps: 'GPS ಬಳಸಿ',
     locating: 'ಸ್ಥಳ ಹುಡುಕುತ್ತಿದೆ...',
     busNo: 'ಬಸ್ ಸಂಖ್ಯೆ',
@@ -312,7 +362,7 @@ export const TRANSLATIONS: Record<AppLang, Translations> = {
     scheduled: 'ನಿಗದಿತ',
     clickRowHint: 'ನಿಲ್ದಾಣಗಳ ಮಾರ್ಗ ನೋಡಲು ಸಾಲನ್ನು ಒತ್ತಿ',
     trackRouteLabel: 'ಮಾರ್ಗ, ನಿಲ್ದಾಣ ಅಥವಾ ಬಸ್ ಸಂಖ್ಯೆಯಿಂದ ಹುಡುಕಿ',
-    trackRoutePlaceholder: 'ಉದಾ: Airport, ಮೆಜೆಸ್ಟಿಕ್, 101-A...',
+    trackRoutePlaceholder: 'ಮಾರ್ಗ, ನಿಲ್ದಾಣ ಅಥವಾ ಬಸ್ ಸಂಖ್ಯೆ ಹುಡುಕಿ...',
     myGps: 'ನನ್ನ GPS',
     liveBuses: 'ನೇರ ಬಸ್‌ಗಳು',
     active: 'ಸಕ್ರಿಯ',
@@ -373,9 +423,13 @@ export const TRANSLATIONS: Record<AppLang, Translations> = {
     browserInstallStep2: '"Install app" ಅಥವಾ "Add to Home screen" ಆಯ್ಕೆಮಾಡಿ.',
     inAppBrowserHint:
       'ನೀವು ಈ ಲಿಂಕ್ ಅನ್ನು WhatsApp ಅಥವಾ ಇತರ ಆ್ಯಪ್ ಒಳಗೆ ತೆರೆದಿದ್ದರೆ, ಲಿಂಕ್ ಕಾಪಿ ಮಾಡಿ Chrome (Android) ಅಥವಾ Safari (iPhone) ನಲ್ಲಿ ತೆರೆಯಿರಿ.',
+    directInstallUnavailableHint:
+      'ಈ ಟ್ಯಾಬ್‌ನಲ್ಲಿ ಬ್ರೌಸರ್ ಸ್ವಯಂಚಾಲಿತ ಇನ್‌ಸ್ಟಾಲ್ ಪಾಪ್‌ಅಪ್ ನೀಡಿಲ್ಲ (ಆ್ಯಪ್ ಈಗಾಗಲೇ ಇನ್‌ಸ್ಟಾಲ್ ಆಗಿದ್ದರೆ, Incognito/iOS Safari ನಲ್ಲಿದ್ದರೆ ಅಥವಾ ಹಿಂದೆ ರದ್ದುಗೊಳಿಸಿದ್ದರೆ ಹೀಗಾಗುತ್ತದೆ). ಬ್ರೌಸರ್ ಮೆನುವಿನಿಂದ ಇನ್‌ಸ್ಟಾಲ್ ಮಾಡಿ:',
     copyAppLink: 'ಆ್ಯಪ್ ಲಿಂಕ್ ಕಾಪಿ ಮಾಡಿ',
     linkCopied: 'ಲಿಂಕ್ ಕಾಪಿಯಾಗಿದೆ!',
     installNowBtn: 'ಈಗಲೇ ಇನ್‌ಸ್ಟಾಲ್ ಮಾಡಿ',
+    scanToInstallQr: 'ಮೊಬೈಲ್‌ನಲ್ಲಿ ನೇರವಾಗಿ ತೆರೆಯಲು ಮತ್ತು ಇನ್‌ಸ್ಟಾಲ್ ಮಾಡಲು QR ಸ್ಕ್ಯಾನ್ ಮಾಡಿ',
+    downloadQrBtn: 'QR ಡೌನ್‌ಲೋಡ್',
     close: 'ಮುಚ್ಚಿ',
     offlineMessage: 'ಆಫ್‌ಲೈನ್ ಮೋಡ್ — ಉಳಿಸಿದ ವೇಳಾಪಟ್ಟಿ ತೋರಿಸಲಾಗುತ್ತಿದೆ.',
     drivingLicenseNumber: 'ಡ್ರೈವಿಂಗ್ ಲೈಸೆನ್ಸ್ ಸಂಖ್ಯೆ',
@@ -385,6 +439,7 @@ export const TRANSLATIONS: Record<AppLang, Translations> = {
     registeredDrivers: 'ನೋಂದಾಯಿತ ಚಾಲಕರು',
     approveDriver: 'ಅನುಮೋದಿಸಿ',
     rejectDriver: 'ತಿರಸ್ಕರಿಸಿ',
+    deleteDriver: 'ಅಳಿಸಿ',
     viewLicense: 'ಲೈಸೆನ್ಸ್ ನೋಡಿ',
     approved: 'ಅನುಮೋದಿಸಲಾಗಿದೆ',
     pending: 'ಬಾಕಿ ಇದೆ',
@@ -408,6 +463,30 @@ export const TRANSLATIONS: Record<AppLang, Translations> = {
     permissionDeniedHint:
       'ಬ್ರೌಸರ್ ನೋಟಿಫಿಕೇಶನ್ ನಿರ್ಬಂಧಿಸಲಾಗಿದೆ — ಬದಲಿಗೆ ಇಲ್ಲಿಯೇ ತಕ್ಷಣದ ಸೂಚನೆ ಕಾಣಿಸುತ್ತದೆ.',
     approachingAlertPrefix: 'ಹತ್ತಿರ ಬರುತ್ತಿದೆ',
+    showingTopBusesHint:
+      '3 ಬಸ್‌ಗಳನ್ನು ತೋರಿಸಲಾಗುತ್ತಿದೆ · ನಿರ್ದಿಷ್ಟ ಬಸ್ ಹುಡುಕಲು ಮೇಲೆ ಹುಡುಕಿ',
+    arrivingAtStopCol: 'ನಿಮ್ಮ ಸ್ಥಳಕ್ಕೆ ಬರುವ ಸಮಯ',
+    enterStopForTime: 'ನಿಲ್ದಾಣ ನಮೂದಿಸಿ',
+    liveScheduleBadge: 'ನೇರ ಸಮಯ',
+    driverScheduleTitle: 'ಹೊರಡುವ ಮತ್ತು ತಲುಪುವ ಸಮಯ',
+    reachingTime: 'ತಲುಪುವ ಸಮಯ',
+    saveScheduleBtn: 'ಸಮಯ ಉಳಿಸಿ',
+    scheduleSavedMsg: 'ಪ್ರಯಾಣದ ಹೊರಡುವ ಮತ್ತು ತಲುಪುವ ಸಮಯ ನವೀಕರಿಸಲಾಗಿದೆ.',
+    tripDurationLabel: 'ಪ್ರಯಾಣ ಅವಧಿ',
+    performanceOverview: 'ಕಾರ್ಯಕ್ಷಮತೆ ಅವಲೋಕನ',
+    performanceOverviewDesc:
+      'ಕಳೆದ 30 ದಿನಗಳಲ್ಲಿ ಚಾಲಕರ ಸಮಯಪಾಲನೆ ಮತ್ತು ಕಾರ್ಯಕ್ಷಮತೆ ವರದಿ.',
+    activeLiveRestoredBanner:
+      'ನಿಮ್ಮ ಬಸ್‌ನ ನೇರ ಸ್ಥಳ ಇನ್ನೂ ಹಂಚಿಕೆಯಾಗುತ್ತಿದೆ. ನೀವು ಕೆಳಗೆ ಯಾವಾಗ ಬೇಕಾದರೂ ಹಂಚಿಕೆಯನ್ನು ನಿಲ್ಲಿಸಬಹುದು.',
+    resumeGpsBtn: 'GPS ಮತ್ತೆ ಪ್ರಾರಂಭಿಸಿ',
+    gpsResumedBanner: 'ಈ ಸಾಧನದಲ್ಲಿ ನೇರ GPS ಟ್ರ್ಯಾಕಿಂಗ್ ಮತ್ತೆ ಪ್ರಾರಂಭವಾಗಿದೆ.',
+    completedToursTitle: 'ಪೂರ್ಣಗೊಂಡ ಪ್ರವಾಸಗಳು (Completed Tours)',
+    completedToursHint:
+      'ಮಾರ್ಗ, ನಿಲ್ದಾಣಗಳು ಮತ್ತು ಸಮಯವನ್ನು ಸ್ವಯಂಚಾಲಿತವಾಗಿ ತುಂಬಲು ಪೂರ್ಣಗೊಂಡ ಪ್ರವಾಸವನ್ನು ಒತ್ತಿರಿ.',
+    noCompletedTours:
+      'ಇನ್ನೂ ಯಾವುದೇ ಪ್ರವಾಸಗಳು ಉಳಿಸಲ್ಪಟ್ಟಿಲ್ಲ. ನೀವು ಪ್ರಯಾಣ ಮುಗಿಸಿ ಹಂಚಿಕೆ ನಿಲ್ಲಿಸಿದಾಗ ಇಲ್ಲಿ ಉಳಿಯುತ್ತದೆ.',
+    tourLoadedMsg: 'ಪ್ರವಾಸದ ವಿವರಗಳನ್ನು ಸ್ವಯಂಚಾಲಿತವಾಗಿ ತುಂಬಲಾಗಿದೆ. ಹಂಚಿಕೆ ಪ್ರಾರಂಭಿಸಲು ಸಿದ್ಧವಾಗಿದೆ.',
+    completedTimesLabel: 'ಬಾರಿ',
     incidentLabels: {
       Normal: 'ಸಾಮಾನ್ಯ',
       Delayed: 'ವಿಳಂಬ',

@@ -25,6 +25,14 @@
       rel="stylesheet"
     />
     <script>
+      window.__mybusDeferredInstallPrompt = null;
+      window.addEventListener('beforeinstallprompt', function (e) {
+        e.preventDefault();
+        window.__mybusDeferredInstallPrompt = e;
+      });
+      window.addEventListener('appinstalled', function () {
+        window.__mybusDeferredInstallPrompt = null;
+      });
       try {
         var savedTheme = localStorage.getItem('mybus_theme');
         var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
